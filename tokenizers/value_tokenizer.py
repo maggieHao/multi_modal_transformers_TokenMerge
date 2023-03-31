@@ -11,7 +11,7 @@ def mu_law_encoder(x, mu=255):
 @dataclasses.dataclass
 class DiscreteValueTokenizeOp:
     def __call__(self, x):
-        chex.assert_type(x, jnp.array)
+        chex.assert_type(x, jnp.array())
         chex.assert_rank(x, 1)
         return x
 
