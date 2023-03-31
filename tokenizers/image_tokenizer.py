@@ -1,5 +1,6 @@
 """Image Tokenizer Implementation"""
 
+import dataclasses
 import warnings
 from functools import partial
 from typing import Any, Callable, Sequence, Tuple
@@ -14,7 +15,7 @@ ModuleDef = Any
 
 
 ############################
-# Image Patching Functions
+# Image Tokenizer
 ############################
 
 # TODO(peterdavidfagan): verify this is row-major format.
@@ -50,7 +51,7 @@ def image_to_patches(image, patch_size, normalize):
 
     # normalize pixel values
     if normalize:
-        patches = (patches + 1.0) / 255.0
+        patches = (2*patches / 255.0) - 1.0
         patches = patches / jnp.sqrt(patch_size)
 
     return patches
@@ -58,8 +59,16 @@ def image_to_patches(image, patch_size, normalize):
 # vectorise image patching function
 image_to_patches_v = jax.vmap(image_to_patches, in_axes=(0, None, None), out_axes=(0))
 
+# create datclass (inspired by: https://github.com/google/flax/blob/71e4432d62306afd0fd12f556ba077de1362eb46/examples/wmt/tokenizer.py#L146)
+@dataclasses.dataclass
+class ImageTokenizeOp:
+    sp_tokenizer: Any
+
+    def __call__(self, features):
+        return self.sp_tokenizer(features)
+
 ########################
-# Position Encodings
+# Position Encoding
 ########################
 
 class PositionEncoder(nn.Module):
@@ -88,10 +97,6 @@ class PositionEncoder(nn.Module):
     def __call__(self, sequence):
         return self.encode_mat[:, : sequence.shape[1], :]
 
-
-########################
-# Tokenizers
-########################
 
 # use resnet for patch embedding as in Gato paper.
 # https://github.com/google/flax/blob/main/examples/imagenet/models.py

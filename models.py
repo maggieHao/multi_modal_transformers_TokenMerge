@@ -1,6 +1,5 @@
 """
 Transformer architecture implementation.
-
 Heavily inspired by: https://github.com/google/flax/blob/main/examples/wmt/models.py
 """
 
@@ -121,7 +120,7 @@ class DecoderBlock(nn.Module):
 
 
 class Encoder(nn.Module):
-    """Encoder that accepts input embeddings"""
+   """Encoder that accepts input embeddings"""
 
     config: dict
 
@@ -144,4 +143,4 @@ class Decoder(nn.Module):
         outputs = nn.LayerNorm()(x)
         logits = nn.Dense()(outputs)
 
-        return logits
+        return logits 
