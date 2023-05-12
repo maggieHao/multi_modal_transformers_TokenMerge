@@ -13,7 +13,7 @@ from jax import pmap, random, vmap
 import jax.numpy as jnp
 
 # choose to enable/disable chex asserts
-#chex.disable_asserts()
+chex.disable_asserts()
 
 ### Distance Metrics ###
 
@@ -39,17 +39,12 @@ def euclidean_distance(point: jnp.ndarray, point_set: jnp.ndarray) -> jnp.ndarra
 
     return distances
 
+# TODO: Consider performance difference between the above and using vmap. 
 #def euclidean_distance(x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
 #    """
 #    Implements euclidean distance between two vectors.
 #    """
 #    return jnp.linalg.norm(x - y, axis=-1)
-
-def cosine_distance(x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
-    """
-    Implements cosine distance between two vectors.
-    """
-    return jnp.dot(x, y) / (jnp.linalg.norm(x) * jnp.linalg.norm(y))
 
 ### Sampling Methods ###
 
@@ -131,7 +126,7 @@ def knn(points, centroid, k, distance_metric="euclidean"):
 
     
 
-### Bringing it all together (https://www.youtube.com/watch?v=73lj5qJbrms) ###
+### Creating the Sample and Group module ###
 
 class SampleAndGroupModule(nn.Module):
     """
@@ -167,7 +162,7 @@ class SampleAndGroupModule(nn.Module):
                 in_axes=(None, 0, None, None), 
                 out_axes=0)(points_xyz, centroids, num_groups, knn_distance_metric)
 
-        # calculate distance between sampled point and other points in the group
+        # aggregate features from groups
         def aggregate(points, group, centroid):
             # repeat centroid for each point in the group 
             centroid_repeated = jnp.tile(centroid, (cluster_features.shape[0], 1))
@@ -179,80 +174,12 @@ class SampleAndGroupModule(nn.Module):
             # concatenate delta with cluster features
             cluster_features = jnp.concatenate((delta, cluster_features), axis=1)
         
-    
         features = vmap(aggregate, (None, 0, 0))(points, groups, sampled_points)
 
-        # apply linear batch norm and relu twice and complete with max pooling
+        # apply linear batch norm and relu twice followed by max pooling
         features = nn.relu(nn.BatchNorm(nn.Linear(features.shape[-1], ))(features))
         features = nn.relu(nn.BatchNorm(nn.Linear(features.shape[-1], ))(features))
         features = nn.max_pool(features, axis=1)
 
         return features
 
-
-#def sample_and_group(points: jnp.ndarray, num_samples: int, distance_metric: Callable, random_key):
-#    """
-#    Point cloud sampling and grouping.
-#
-#    source: https://arxiv.org/pdf/2012.09688.pdf
-#    """
-    # sample points
-#    sampled_points = farthest_point_sampling(
-#            points, 
-#            num_samples=num_samples, 
-#            distance_metric=distance_metric,
-#            random_key=random_key,
-#            )
-
-    # group points
-#    groups = vmap(knn, in_axes=(None, 0, None, None), out_axes=0)(sampled_points, points, 32, "euclidean")
-
-    # calculate distance between sampled point and other points in the group
-#    def aggregate(points, group, centroid):
-        # repeat centroid for each point in the group 
-#        centroid_repeated = jnp.tile(centroid, (cluster_features.shape[0], 1))
-
-        # calculate distance between each point in the group and the centroid
-#        cluster_features = jnp.take(points, group, axis=0)
-#        delta = cluster_features - centroid_repeated
-
-        # concatenate delta with cluster features
-#        cluster_features = jnp.concatenate((delta, cluster_features), axis=1)
-        
-    
-#    features = vmap(aggregate, (None, 0, 0))(points, groups, sampled_points)
-    
-
-    # apply linear batch norm and relu twice and complete with max pooling
-    
-
-#    return features
-
-if __name__=="__main__":
-    # generate a random key
-    random_key = random.PRNGKey(1)
-
-    # test euclidean distance
-    #sample_point = jnp.array([1, 2, 3])
-    #points = jnp.array([[1, 2, 5], [1, 2, 4], [1, 2, 3], [10,11,12]])
-    #print(euclidean_distance(sample_point, points))
-    
-    # test farthest point sampling
-    #num_samples = 2
-    #sampled_points = farthest_point_sampling(points, num_samples, euclidean_distance, random_key)
-    #print(sampled_points)
-
-
-    # test knn 
-    #centroid = jnp.array([1, 2, 3], dtype=jnp.float32)
-    #points = jnp.array([[1, 2, 5], [1, 2, 4], [1, 2, 3], [10,11,12]], dtype=jnp.float32)
-    #k = 2
-    #print(knn(points, centroid, k, distance_metric="euclidean"))
-
-    # try to vmap knn
-    #centroids = jnp.array([[1, 2, 3], [10, 11, 12]], dtype=jnp.float32)
-    #print(centroids.shape)
-    #sampled_points = vmap(knn, (None, 0, None, None), 0)(points, centroids, 2, "euclidean")
-    #print(sampled_points)
-
-    # test sample and group module
