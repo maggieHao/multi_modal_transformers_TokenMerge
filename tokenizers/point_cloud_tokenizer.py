@@ -7,9 +7,10 @@ from typing import Callable
 
 # deep learning framework
 import chex
+import flax.linen as nn
 import jax
-import jax.numpy as jnp
 from jax import pmap, random, vmap
+import jax.numpy as jnp
 
 # choose to enable/disable chex asserts
 #chex.disable_asserts()
@@ -132,35 +133,100 @@ def knn(points, centroid, k, distance_metric="euclidean"):
 
 ### Bringing it all together (https://www.youtube.com/watch?v=73lj5qJbrms) ###
 
-def sample_and_group(points: jnp.ndarray, num_samples: int, distance_metric: Callable, random_key):
+class SampleAndGroupModule(nn.Module):
     """
-    Point cloud sampling and grouping.
+    Module to downsample and group point cloud data.
+    """
+    num_samples: int
+    num_groups: int
+    fps_distance_metric: Callable # fps = farthest point sampling
+    knn_distance_metric: str
+    embed_dim: int
 
-    source: https://arxiv.org/pdf/2012.09688.pdf
-    """
-    # sample points
-    sampled_points = farthest_point_sampling(
-            points, 
+    def __call__(self, points, random_key):
+        # unpack module parameters
+        num_samples = self.num_samples
+        num_groups = self.num_groups
+        fps_distance_metric = self.fps_distance_metric
+        knn_distance_metric = self.knn_distance_metric
+        embed_dim = self.embed_dim
+        points_xyz = points[:, :3] # for sampling and grouping
+
+        # sample points
+        sampled_points = farthest_point_sampling(
+            point_xyz, 
             num_samples=num_samples, 
-            distance_metric=distance_metric,
+            distance_metric=fps_distance_metric,
             random_key=random_key,
             )
 
-    # group points
-    #groups = vmap(knn, in_axes=(None, 0, None), out_axes=0)(sampled_points, points, k=32, distance_metric="euclidean")
+        # group points
+        centroids = jnp.take(points_xyz, sampled_points)
+        groups = vmap(
+                knn, 
+                in_axes=(None, 0, None, None), 
+                out_axes=0)(points_xyz, centroids, num_groups, knn_distance_metric)
 
-    # generate group features through aggregation
+        # calculate distance between sampled point and other points in the group
+        def aggregate(points, group, centroid):
+            # repeat centroid for each point in the group 
+            centroid_repeated = jnp.tile(centroid, (cluster_features.shape[0], 1))
+
+            # calculate distance between each point in the group and the centroid
+            cluster_features = jnp.take(points, group, axis=0)
+            delta = cluster_features - centroid_repeated
+
+            # concatenate delta with cluster features
+            cluster_features = jnp.concatenate((delta, cluster_features), axis=1)
+        
+    
+        features = vmap(aggregate, (None, 0, 0))(points, groups, sampled_points)
+
+        # apply linear batch norm and relu twice and complete with max pooling
+        features = nn.relu(nn.BatchNorm(nn.Linear(features.shape[-1], ))(features))
+        features = nn.relu(nn.BatchNorm(nn.Linear(features.shape[-1], ))(features))
+        features = nn.max_pool(features, axis=1)
+
+        return features
+
+
+#def sample_and_group(points: jnp.ndarray, num_samples: int, distance_metric: Callable, random_key):
+#    """
+#    Point cloud sampling and grouping.
+#
+#    source: https://arxiv.org/pdf/2012.09688.pdf
+#    """
+    # sample points
+#    sampled_points = farthest_point_sampling(
+#            points, 
+#            num_samples=num_samples, 
+#            distance_metric=distance_metric,
+#            random_key=random_key,
+#            )
+
+    # group points
+#    groups = vmap(knn, in_axes=(None, 0, None, None), out_axes=0)(sampled_points, points, 32, "euclidean")
 
     # calculate distance between sampled point and other points in the group
+#    def aggregate(points, group, centroid):
+        # repeat centroid for each point in the group 
+#        centroid_repeated = jnp.tile(centroid, (cluster_features.shape[0], 1))
 
-    # concatenate this term with 
+        # calculate distance between each point in the group and the centroid
+#        cluster_features = jnp.take(points, group, axis=0)
+#        delta = cluster_features - centroid_repeated
+
+        # concatenate delta with cluster features
+#        cluster_features = jnp.concatenate((delta, cluster_features), axis=1)
+        
+    
+#    features = vmap(aggregate, (None, 0, 0))(points, groups, sampled_points)
+    
 
     # apply linear batch norm and relu twice and complete with max pooling
     
-    #return features
-    
-    pass
 
+#    return features
 
 if __name__=="__main__":
     # generate a random key
@@ -178,13 +244,15 @@ if __name__=="__main__":
 
 
     # test knn 
-    centroid = jnp.array([1, 2, 3], dtype=jnp.float32)
-    points = jnp.array([[1, 2, 5], [1, 2, 4], [1, 2, 3], [10,11,12]], dtype=jnp.float32)
-    k = 2
+    #centroid = jnp.array([1, 2, 3], dtype=jnp.float32)
+    #points = jnp.array([[1, 2, 5], [1, 2, 4], [1, 2, 3], [10,11,12]], dtype=jnp.float32)
+    #k = 2
     #print(knn(points, centroid, k, distance_metric="euclidean"))
 
     # try to vmap knn
-    centroids = jnp.array([[1, 2, 3], [10, 11, 12]], dtype=jnp.float32)
-    print(centroids.shape)
-    sampled_points = vmap(knn, (None, 0, None, None), 0)(points, centroids, 2, "euclidean")
-    print(sampled_points)
+    #centroids = jnp.array([[1, 2, 3], [10, 11, 12]], dtype=jnp.float32)
+    #print(centroids.shape)
+    #sampled_points = vmap(knn, (None, 0, None, None), 0)(points, centroids, 2, "euclidean")
+    #print(sampled_points)
+
+    # test sample and group module
