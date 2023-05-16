@@ -126,7 +126,6 @@ def knn(points, centroid, k, distance_metric="euclidean"):
     
 
 ### Creating the Sample and Group module ###
-
 class SampleAndGroupModule(nn.Module):
     """
     Module to downsample and group point cloud data.
@@ -176,6 +175,7 @@ class SampleAndGroupModule(nn.Module):
         
         features = vmap(aggregate, (None, 0, 0))(points, groups, sampled_points)
 
+        # TODO: fix this output layer to be applied pointwise, through adding batch_dims
         # apply linear batch norm and relu twice followed by max pooling
         features = nn.relu(nn.BatchNorm(nn.Linear(features.shape[-1], ))(features))
         features = nn.relu(nn.BatchNorm(nn.Linear(features.shape[-1], ))(features))

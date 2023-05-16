@@ -1,0 +1,23 @@
+LBR1:
+  output_dim: 64
+
+LBR2:
+  output_dim: 64
+
+SampleAndGroup1:
+  num_samples: 2048
+  num_groups: 512
+  embed_dim: 64
+
+SampleAndGroup2:
+  num_samples: 350
+  num_groups: 256
+  embed_dim: 64
+
+OffsetAttention:
+  num_heads: 
+  dtype:
+  qkv_features:
+  out_features:
+  drouput_rate:
+
