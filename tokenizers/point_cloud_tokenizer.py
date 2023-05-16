@@ -2,15 +2,14 @@
 Implementation of a tokenizer for point cloud data.
 """
 
-# base python imports
 from typing import Callable
 
-# deep learning framework
 import chex
+import flax
 import flax.linen as nn
 import jax
-from jax import pmap, random, vmap
 import jax.numpy as jnp
+from jax import pmap, random, vmap
 
 # choose to enable/disable chex asserts
 chex.disable_asserts()
@@ -137,7 +136,8 @@ class SampleAndGroupModule(nn.Module):
     fps_distance_metric: Callable # fps = farthest point sampling
     knn_distance_metric: str
     embed_dim: int
-
+    
+    @nn.compact
     def __call__(self, points, random_key):
         # unpack module parameters
         num_samples = self.num_samples
