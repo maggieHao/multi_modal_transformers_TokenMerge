@@ -38,13 +38,6 @@ def euclidean_distance(point: jnp.ndarray, point_set: jnp.ndarray) -> jnp.ndarra
 
     return distances
 
-# TODO: Consider performance difference between the above and using vmap. 
-#def euclidean_distance(x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
-#    """
-#    Implements euclidean distance between two vectors.
-#    """
-#    return jnp.linalg.norm(x - y, axis=-1)
-
 ### Sampling Methods ###
 
 def farthest_point_sampling(points: jnp.ndarray, 
@@ -67,7 +60,7 @@ def farthest_point_sampling(points: jnp.ndarray,
 
     # initialize infinite distance values
     distances = jnp.ones(NUM_POINTS) * jnp.inf
-    sampled_pt_ids = jnp.array([])
+    sampled_pt_ids = jnp.array([], dtype=jnp.int32) # concerned about efficient of this variable
 
     # draw random sample
     sampled_pt_id = random.choice(random_key, NUM_POINTS, replace=False)
@@ -75,9 +68,8 @@ def farthest_point_sampling(points: jnp.ndarray,
     sampled_pt_ids = jnp.append(sampled_pt_ids, sampled_pt_id)
 
     for itr in range(num_samples - 1):
+        print(itr)
         # calculate distance between sampled point and all points
-        # TODO: consider computational benefit of filtering for unsampled points
-        unsampled_pt_ids = jnp.setdiff1d(jnp.arange(NUM_POINTS), sampled_pt_ids)
         distance_to_sampled_pt = distance_metric(
                                                 sampled_pt_val, 
                                                 points
@@ -130,56 +122,77 @@ class SampleAndGroupModule(nn.Module):
     """
     Module to downsample and group point cloud data.
     """
-    num_samples: int
-    num_groups: int
+    config: dict
     fps_distance_metric: Callable # fps = farthest point sampling
-    knn_distance_metric: str
-    embed_dim: int
+    is_training: bool
     
     @nn.compact
     def __call__(self, points, random_key):
         # unpack module parameters
-        num_samples = self.num_samples
-        num_groups = self.num_groups
+        num_samples = self.config["num_samples"]
+        num_neighbours_knn = self.config["num_neighbours_knn"]
+        knn_distance_metric = self.config["knn_distance_metric"]
+        embed_dim = self.config["embed_dim"]
         fps_distance_metric = self.fps_distance_metric
-        knn_distance_metric = self.knn_distance_metric
-        embed_dim = self.embed_dim
+        is_training = self.is_training
         points_xyz = points[:, :3] # for sampling and grouping
 
         # sample points
         sampled_points = farthest_point_sampling(
-            point_xyz, 
+            points_xyz, 
             num_samples=num_samples, 
             distance_metric=fps_distance_metric,
             random_key=random_key,
             )
 
         # group points
-        centroids = jnp.take(points_xyz, sampled_points)
+        centroids = jnp.take(points_xyz, sampled_points, axis=0)
+
         groups = vmap(
                 knn, 
                 in_axes=(None, 0, None, None), 
-                out_axes=0)(points_xyz, centroids, num_groups, knn_distance_metric)
+                out_axes=0)(points_xyz, centroids, num_neighbours_knn, knn_distance_metric)
 
         # aggregate features from groups
         def aggregate(points, group, centroid):
             # repeat centroid for each point in the group 
-            centroid_repeated = jnp.tile(centroid, (cluster_features.shape[0], 1))
+            centroid_repeated = jnp.tile(centroid, (group.shape[0], 1))
 
             # calculate distance between each point in the group and the centroid
             cluster_features = jnp.take(points, group, axis=0)
             delta = cluster_features - centroid_repeated
 
             # concatenate delta with cluster features
-            cluster_features = jnp.concatenate((delta, cluster_features), axis=1)
+            cluster_features = jnp.concatenate((delta, cluster_features), axis=-1)
+            return cluster_features
         
         features = vmap(aggregate, (None, 0, 0))(points, groups, sampled_points)
 
-        # TODO: fix this output layer to be applied pointwise, through adding batch_dims
-        # apply linear batch norm and relu twice followed by max pooling
-        features = nn.relu(nn.BatchNorm(nn.Linear(features.shape[-1], ))(features))
-        features = nn.relu(nn.BatchNorm(nn.Linear(features.shape[-1], ))(features))
-        features = nn.max_pool(features, axis=1)
+        # Linear -> BatchNorm -> ReLU
+        config = self.config["LBR_1"]
+        x = nn.DenseGeneral(
+                features=config["DenseGeneral"]["features"],
+                axis=config["DenseGeneral"]["axis"],
+                batch_dims=config["DenseGeneral"]["batch_dims"],
+                use_bias=config["DenseGeneral"]["bias"],
+                kernel_init=nn.initializers.xavier_uniform(),
+                name=config["DenseGeneral"]["name"],
+                )(features)
+        x = nn.BatchNorm(use_running_average=is_training)(x)
+        x = nn.relu(x)
 
-        return features
+        # Linear -> BatchNorm -> ReLU
+        config = self.config["LBR_2"]
+        x = nn.DenseGeneral(
+                features=config["DenseGeneral"]["features"],
+                axis=config["DenseGeneral"]["axis"],
+                batch_dims=config["DenseGeneral"]["batch_dims"],
+                use_bias=config["DenseGeneral"]["bias"],
+                kernel_init=nn.initializers.xavier_uniform(),
+                name=config["DenseGeneral"]["name"],
+                )(x)
+        x = nn.BatchNorm(use_running_average=is_training)(x)
+        x = nn.relu(x)
+
+        return x
 

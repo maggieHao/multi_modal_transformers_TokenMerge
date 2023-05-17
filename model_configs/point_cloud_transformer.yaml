@@ -1,23 +1,120 @@
-LBR1:
-  output_dim: 64
+### Linear->BatchNorm->ReLU ###
 
-LBR2:
-  output_dim: 64
+LBR_1:
+  DenseGeneral:
+    features: 64
+    axis: -1
+    batch_dims: 0
+    bias: False
+    name: "lbr_1_linear"
+
+  BatchNorm:
+    
+  ReLU:
+
+### Linear->BatchNorm->ReLU ###
+
+LBR_2:
+  DenseGeneral:
+    features: 64
+    axis: -1
+    batch_dims: 0
+    bias: False
+    name: "lbr_2_linear"
+
+  BatchNorm:
+
+  ReLU:
+
+### Sample and Grouping ###
 
 SampleAndGroup1:
-  num_samples: 2048
-  num_groups: 512
+  num_samples: 20 #2048
+  num_neighbours_knn: 10 #512
+  knn_distance_metric: "euclidean"
   embed_dim: 64
+
+  LBR_1:
+    DenseGeneral:
+      features: 64
+      axis: !!python/tuple [-2, -1]
+      batch_dims: 0
+      bias: False
+      name: "sample_group_1_linear_1"
+
+    BatchNorm:
+    
+    ReLU:
+
+  LBR_2:
+    DenseGeneral:
+      features: 64
+      axis: -1
+      batch_dims: 0
+      bias: False
+      name: "sample_group_1_linear_2"
+
+    BatchNorm:
+
+    ReLU:
+
+
+### Sample and Grouping ###
 
 SampleAndGroup2:
-  num_samples: 350
-  num_groups: 256
-  embed_dim: 64
+  num_samples: 10
+  num_neighbours_knn: 3
+  knn_distance_metric: "euclidean"
+  embed_dim: 128
 
-OffsetAttention:
-  num_heads: 
-  dtype:
-  qkv_features:
-  out_features:
-  drouput_rate:
+  LBR_1:
+    DenseGeneral:
+      features: 128
+      axis: !!python/tuple [-2, -1]
+      batch_dims: 0
+      bias: False
+      name: "sample_group_1_linear_1"
+
+    BatchNorm:
+    
+    ReLU:
+
+  LBR_2:
+    DenseGeneral:
+      features: 128
+      axis: -1
+      batch_dims: 0
+      bias: False
+      name: "sample_group_2_linear_2"
+
+    BatchNorm:
+
+    ReLU:
+
+
+### Offset Attention Layers ###
+
+OffsetAttention1:
+  num_heads: 8
+  qkv_features: 128
+  out_features: 128
+  embed_dim: 128
+
+OffsetAttention2:
+  num_heads: 8
+  qkv_features: 128
+  out_features: 128
+  embed_dim: 128
+
+OffsetAttention3:
+  num_heads: 8
+  qkv_features: 128
+  out_features: 128
+  embed_dim: 128
+
+OffsetAttention4:
+  num_heads: 8
+  qkv_features: 128
+  out_features: 128
+  embed_dim: 128
 
