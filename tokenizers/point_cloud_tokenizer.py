@@ -39,7 +39,6 @@ def euclidean_distance(point: jnp.ndarray, point_set: jnp.ndarray) -> jnp.ndarra
     return distances
 
 ### Sampling Methods ###
-
 def farthest_point_sampling(points: jnp.ndarray, 
                             num_samples: int,
                             distance_metric: Callable,
@@ -68,7 +67,7 @@ def farthest_point_sampling(points: jnp.ndarray,
     sampled_pt_ids = jnp.append(sampled_pt_ids, sampled_pt_id)
 
     for itr in range(num_samples - 1):
-        print(itr)
+        #print(itr)
         # calculate distance between sampled point and all points
         distance_to_sampled_pt = distance_metric(
                                                 sampled_pt_val, 
@@ -92,6 +91,7 @@ def farthest_point_sampling(points: jnp.ndarray,
 
     return sampled_pt_ids
 
+farthest_point_sampling_jitted = jax.jit(farthest_point_sampling, static_argnums=(1, 2))
 
 ### Grouping Methods ###
 
@@ -115,7 +115,7 @@ def knn(points, centroid, k, distance_metric="euclidean"):
     
     return jax.lax.approx_max_k(-distance, k)[1]
 
-    
+knn_jitted = jax.jit(knn, static_argnums=(2, 3)) 
 
 ### Creating the Sample and Group module ###
 class SampleAndGroupModule(nn.Module):
@@ -138,7 +138,7 @@ class SampleAndGroupModule(nn.Module):
         points_xyz = points[:, :3] # for sampling and grouping
 
         # sample points
-        sampled_points = farthest_point_sampling(
+        sampled_points = farthest_point_sampling_jitted(
             points_xyz, 
             num_samples=num_samples, 
             distance_metric=fps_distance_metric,
@@ -149,7 +149,7 @@ class SampleAndGroupModule(nn.Module):
         centroids = jnp.take(points_xyz, sampled_points, axis=0)
 
         groups = vmap(
-                knn, 
+                knn_jitted, 
                 in_axes=(None, 0, None, None), 
                 out_axes=0)(points_xyz, centroids, num_neighbours_knn, knn_distance_metric)
 
@@ -165,8 +165,9 @@ class SampleAndGroupModule(nn.Module):
             # concatenate delta with cluster features
             cluster_features = jnp.concatenate((delta, cluster_features), axis=-1)
             return cluster_features
-        
-        features = vmap(aggregate, (None, 0, 0))(points, groups, sampled_points)
+
+        aggregate_jitted = jax.jit(aggregate)
+        features = vmap(aggregate_jitted, (None, 0, 0))(points, groups, sampled_points)
 
         # Linear -> BatchNorm -> ReLU
         config = self.config["LBR_1"]

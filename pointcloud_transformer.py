@@ -4,6 +4,7 @@ Implementation of Point Cloud Transformer Architecture
 
 import os
 import yaml
+import time
 
 from absl.testing import absltest, parameterized
 
@@ -132,7 +133,7 @@ if __name__ == "__main__":
 
     # generate dummy pointcloud data
     #BATCH_SIZE = 4
-    #NUM_POINTS = 150
+    #NUM_POINTS = 307200
     #NUM_FEATURES = 3
     #IS_TRAINING = False
 
@@ -143,5 +144,12 @@ if __name__ == "__main__":
     #params = model.init(jax.random.PRNGKey(0), pointcloud, IS_TRAINING)
         
     # run forward pass
+    #start = time.time()
     #output = model.apply(params, pointcloud, IS_TRAINING, mutable=["batch_stats", "batch_mean", "batch_var"])
+    #end = time.time()
+    #print("Time taken: {}".format(end-start))
 
+    #start = time.time()
+    #output = model.apply(params, pointcloud, IS_TRAINING, mutable=["batch_stats", "batch_mean", "batch_var"])
+    #end = time.time()
+    #print("Time taken: {}".format(end-start))

@@ -29,8 +29,8 @@ LBR_2:
 ### Sample and Grouping ###
 
 SampleAndGroup1:
-  num_samples: 20 #2048
-  num_neighbours_knn: 10 #512
+  num_samples: 512
+  num_neighbours_knn: 50
   knn_distance_metric: "euclidean"
   embed_dim: 64
 
@@ -62,8 +62,8 @@ SampleAndGroup1:
 ### Sample and Grouping ###
 
 SampleAndGroup2:
-  num_samples: 10
-  num_neighbours_knn: 3
+  num_samples: 256
+  num_neighbours_knn: 15
   knn_distance_metric: "euclidean"
   embed_dim: 128
 
