@@ -1,4 +1,6 @@
-"""Image Tokenizer Implementation"""
+"""
+Image tokenizer implementation that aligns with Gato paper.
+"""
 
 import dataclasses
 import warnings
