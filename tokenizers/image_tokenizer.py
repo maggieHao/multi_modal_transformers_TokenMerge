@@ -17,7 +17,7 @@ ModuleDef = Any
 
 
 ############################
-# Image Tokenizer
+# Image Patching
 ############################
 
 # TODO(peterdavidfagan): verify this is row-major format.
@@ -61,13 +61,6 @@ def image_to_patches(image, patch_size, normalize):
 # vectorise image patching function
 image_to_patches_v = jax.vmap(image_to_patches, in_axes=(0, None, None), out_axes=(0))
 
-# create datclass (inspired by: https://github.com/google/flax/blob/71e4432d62306afd0fd12f556ba077de1362eb46/examples/wmt/tokenizer.py#L146)
-@dataclasses.dataclass
-class ImageTokenizeOp:
-    sp_tokenizer: Any
-
-    def __call__(self, features):
-        return self.sp_tokenizer(features)
 
 ########################
 # Position Encoding
@@ -99,6 +92,10 @@ class PositionEncoder(nn.Module):
     def __call__(self, sequence):
         return self.encode_mat[:, : sequence.shape[1], :]
 
+
+########################
+# Image Embedding
+########################
 
 # use resnet for patch embedding as in Gato paper.
 # https://github.com/google/flax/blob/main/examples/imagenet/models.py
@@ -170,8 +167,9 @@ class ImageTokenizer(nn.Module):
         # create embeddings using ResNetV2
         patches = patches.reshape(-1, self.patch_size, self.patch_size, 3)
         embedding = self.embedding_function(patches) 
-        print(embedding.shape)
         embedding = embedding.reshape(-1, 20, self.config["embedding_dim"])
+
+        # TODO: add position encoding
 
         return embedding
 
