@@ -128,7 +128,7 @@ if __name__ == "__main__":
     # profiling with snakeviz
 
     # read in model config 
-    #with open("model_configs/point_cloud_transformer.yaml", "r") as f:
+    #with open("config/point_cloud_transformer.yaml", "r") as f:
     #    model_config = yaml.load(f, Loader=yaml.FullLoader)
 
     # generate dummy pointcloud data

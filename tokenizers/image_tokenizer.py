@@ -12,18 +12,23 @@ import chex
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+from jax import random
+
+# import custom utils for logging
+from ..utils.logger import get_logger
 
 ModuleDef = Any
-
+LOG = get_logger(__name__)
 
 ############################
-# Image Patching
+# Image Preprocessing
 ############################
 
 # TODO(peterdavidfagan): verify this is row-major format.
 def image_to_patches(image, patch_size, normalize):
     """
     Converts an image into patches, assuming square images.
+    Assumes HWC convention.
 
     Args:
         image (jax.numpy.ndarray): the image to be converted into patches.
@@ -34,7 +39,7 @@ def image_to_patches(image, patch_size, normalize):
         jax.numpy.ndarray: the patches of the image.
     """
     # check if the image is square
-    c, h, w = image.shape
+    h, w, c = image.shape
     chex.assert_equal(h, w)
 
     # check if the image is divisible by the patch size
@@ -48,7 +53,7 @@ def image_to_patches(image, patch_size, normalize):
 
     # create an array of patches
     patches = einops.rearrange(
-        image, "c (h p1) (w p2) -> (h w) (p1) (p2) (c)", p1=patch_size, p2=patch_size
+        image, "(h p1) (w p2) c -> (h w) (p1) (p2) (c)", p1=patch_size, p2=patch_size
     )
 
     # normalize pixel values
@@ -58,48 +63,57 @@ def image_to_patches(image, patch_size, normalize):
 
     return patches
 
-# vectorise image patching function
-image_to_patches_v = jax.vmap(image_to_patches, in_axes=(0, None, None), out_axes=(0))
 
-
-########################
-# Position Encoding
-########################
-
-class PositionEncoder(nn.Module):
+def encode_patch_position(image, patch_size, key, train=True):
     """
-    Original Transformer position encoding scheme.
-
-    Inspired by: https://d2l.ai/chapter_attention-mechanisms-and-transformers/self-attention-and-positional-encoding.html
+    Calculates the patch interval for an image.
     """
+    h, w, c = image.shape
+    
+    def get_patch_position_encoding(interval_length, start_idx, stop_idx, key):
+        # normalize patch interval
+        start_idx = start_idx / interval_length
+        stop_idx = stop_idx / interval_length
 
-    config: dict
+        # quantize patch interval
+        start_idx = jnp.floor(start_idx * interval_length)
+        stop_idx = jnp.ceil(stop_idx * interval_length)
+    
 
-    def setup(self):
-        self.encode_mat = jnp.zeros(
-            (1, self.config["max_len"], self.config["embedding_dim"])
-        )
-        domain_values = jnp.arange(self.config["max_len"], dtype=jnp.float32).reshape(
-            -1, 1
-        ) / jnp.power(
-            10000,
-            jnp.arange(0, self.config["embedding_dim"], 2, dtype=jnp.float32)
-            / self.config["embedding_dim"],
-        )
-        self.encode_mat = self.encode_mat.at[:, :, 0::2].set(jnp.sin(domain_values))
-        self.encode_mat = self.encode_mat.at[:, :, 1::2].set(jnp.cos(domain_values))
+        if train:
+            # sample uniformly from the patch interval
+            return random.randint(key, shape=(1,), minval=start_idx, maxval=stop_idx+1)
+        else:
+            # use the center of the patch interval
+            return (start_idx + stop_idx) // 2
 
-    def __call__(self, sequence):
-        return self.encode_mat[:, : sequence.shape[1], :]
+    row_intervals = jnp.arange(0, h+patch_size, patch_size)
+    row_keys = random.split(key, h // patch_size)
+    col_intervals = jnp.arange(0, w+patch_size, patch_size)
+    col_keys = random.split(key, w // patch_size)
+        
+    row_position_encoding = jax.vmap(get_patch_position_encoding, in_axes=(None, 0, 0, 0))(
+            h, row_intervals[:-1], row_intervals[1:], row_keys)
+    row_position_encoding = jnp.squeeze(row_position_encoding)
+    row_position_encoding = jnp.repeat(row_position_encoding, w // patch_size, axis=0)
+
+    col_position_encoding = jax.vmap(get_patch_position_encoding, in_axes=(None, 0, 0, 0))(
+            w, col_intervals[:-1], col_intervals[1:], col_keys)
+    col_position_encoding = jnp.squeeze(col_position_encoding)
+    col_position_encoding = jnp.repeat(col_position_encoding, h // patch_size, axis=0)
+
+    return row_position_encoding, col_position_encoding
 
 
-########################
+
+############################
 # Image Embedding
-########################
+############################
 
-# use resnet for patch embedding as in Gato paper.
+
+### GATO RESNET (Incomplete) ###
+
 # https://github.com/google/flax/blob/main/examples/imagenet/models.py
-
 class ResNetV2Block(nn.Module):
     """
     Note: fixing parameter defaults to match Gato.
@@ -108,44 +122,47 @@ class ResNetV2Block(nn.Module):
     strides: Tuple[int, int] = (1, 1)
     kernel_size: Tuple[int, int] = (3, 3)
     padding: str = "SAME"
-    weights: ModuleDef = nn.Conv
+    conv: ModuleDef = nn.Conv
     normalization: ModuleDef = nn.GroupNorm
     activation: Callable = nn.gelu
 
     @nn.compact
     def __call__(self, x):
-        # Important: I am uncertain about this function.
-        #residual = x
+        # TODO: review groupnorm 
+        residual = x
 
-        # its not possible to perform group norm with 32 groups on image
-        # containing only 3 channels! Start with conv before first group norm.
-        y = self.weights(features=self.features,
-                kernel_size=(1, 1),
-                strides=self.strides,
-                padding=self.padding)(x)
+        y = self.normalization(num_groups=3)(x)
+        y = self.activation(y)
+        y = self.conv(features=self.features,
+                kernel_size=self.kernel_size, 
+                strides=self.strides, 
+                padding=self.padding)(y)
+
+        y = self.normalization()(y)
+        y = self.activation(y)
+        y = self.conv(features=3, 
+                kernel_size=self.kernel_size, 
+                strides=self.strides, 
+                padding=self.padding)(y)
+
+        out = y+residual
+
+        #flatten output
+        out = jnp.ravel(out)
         
-        residual = y
+        return out
 
-        y = self.normalization()(y)
-        y = self.activation(y)
-        y = self.weights(features=self.features, 
-                kernel_size=self.kernel_size, 
-                strides=self.strides, 
-                padding=self.padding)(y)
+### RobotCat VQ-GAN (Incomplete) ###
 
-        y = self.normalization()(y)
-        y = self.activation(y)
-        y = self.weights(features=self.features, 
-                kernel_size=self.kernel_size, 
-                strides=self.strides, 
-                padding=self.padding)(y)
 
-        return y+residual
 
+########################
+# Image Tokenizer
+########################
 
 class ImageTokenizer(nn.Module):
     """
-    Tokenizer for images.
+    Converts images into tokens.
     """
 
     config: dict
@@ -158,38 +175,58 @@ class ImageTokenizer(nn.Module):
         self.patch_size = self.config["patch_size"]
         self.normalize = self.config["normalize"]
         self.embedding_function = ResNetV2Block(features = self.config["embedding_dim"])
-        #self.position_encoder = PositionEncoder(self.config)
+        self.row_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2)*3)
+        self.col_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2)*3)
 
-    def __call__(self, image):
+    def __call__(self, image, key, train=True):
+        """
+        Args:
+            images (jax.numpy.ndarray): the images to be tokenized (num_batches, num_sequences, num_images, H, W, C).
+        """
+
         # convert image into patches
-        patches = image_to_patches_v(image, self.patch_size, self.normalize)
+        patches = image_to_patches(image, self.patch_size, self.normalize)
+
+        chex.assert_equal(
+                patches.shape,
+                (
+                    (image.shape[0]//self.patch_size)**2, # patches per image
+                    self.patch_size, # patch_dim
+                    self.patch_size, # patch_dim
+                    image.shape[-1] # channels_dim
+                )
+                )
+
+        # create patch embeddings
+        def embed_patch(patch):
+            return self.embedding_function(patch)
+
+        patch_embeddings = jax.vmap(embed_patch)(patches)
         
-        # create embeddings using ResNetV2
-        patches = patches.reshape(-1, self.patch_size, self.patch_size, 3)
-        embedding = self.embedding_function(patches) 
-        embedding = embedding.reshape(-1, 20, self.config["embedding_dim"])
+        chex.assert_equal(
+                patch_embeddings.shape,
+                (
+                    (image.shape[0]//self.patch_size)**2, # patches per image
+                    (self.patch_size**2)*image.shape[-1] # embedding_dim
+                )
+                )
 
-        # TODO: add position encoding
+        # create patch position embeddings
+        row_positions, col_positions = encode_patch_position(image, self.patch_size, key, train=train)
+        
+        def embed_row(row):
+            return self.row_embeddings(row)
 
-        return embedding
+        def embed_col(col):
+            return self.col_embeddings(col)
+        
+        row_position_embeddings = jax.vmap(embed_row)(row_positions)
+        col_position_embeddings = jax.vmap(embed_col)(col_positions)
 
+        chex.assert_equal(
+                row_position_embeddings.shape,
+                patch_embeddings.shape
+                )
 
-if __name__ == "__main__":
-    # for debugging purposes
-    image = jnp.ones((15, 3, 280, 280))
-    image_tokens = image_to_patches_v(image, 14, True)
+        return patch_embeddings + row_position_embeddings + col_position_embeddings
 
-    # instantiate tokenizer
-    config = {
-        "patch_size": 14,
-        "normalize": True,
-        "embedding_dim": 64,
-            }
-    tokenizer = ImageTokenizer(config)
-
-    # initialize tokenizer
-    rng = jax.random.PRNGKey(0)
-    rng, init_rng = jax.random.split(rng)
-    params = tokenizer.init(init_rng, image)
-    print(params)
-    print(image_tokens.shape)
