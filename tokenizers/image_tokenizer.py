@@ -189,7 +189,7 @@ class ImageTokenizer(nn.Module):
         self.image_size = self.config["image_size"]
         self.patch_size = self.config["patch_size"]
         self.normalize = self.config["normalize"]
-        self.embedding_function = ResNetV2Block(features = self.config["embedding_dim"])
+        self.embedding_function = ResNetV2Block(features = self.config["num_feature_maps"])
         self.row_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2))
         self.col_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2))
 
