@@ -128,25 +128,39 @@ class ResNetV2Block(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        # TODO: review groupnorm 
+        # start with convolution projection
+        x = self.conv(features=self.features,
+                kernel_size=self.kernel_size,
+                strides=self.strides,
+                padding=self.padding)(x)
+        x = self.normalization()(x)
+        x = self.activation(x)
+
+        # resnetv2block
         residual = x
 
-        y = self.normalization(num_groups=3)(x)
+        y = self.normalization()(x)
         y = self.activation(y)
         y = self.conv(features=self.features,
                 kernel_size=self.kernel_size, 
                 strides=self.strides, 
                 padding=self.padding)(y)
-
+        
         y = self.normalization()(y)
         y = self.activation(y)
-        y = self.conv(features=3, 
+        y = self.conv(features=self.features,
                 kernel_size=self.kernel_size, 
                 strides=self.strides, 
                 padding=self.padding)(y)
-
+  
         out = y+residual
-
+        
+        # map to embedding dimension
+        out = self.conv(features=1,
+                kernel_size=(1,1),
+                strides=(1,1),
+                padding=self.padding)(out)
+        
         #flatten output
         out = jnp.ravel(out)
         
@@ -172,17 +186,25 @@ class ImageTokenizer(nn.Module):
         raise NotImplementedError
 
     def setup(self):
+        self.image_size = self.config["image_size"]
         self.patch_size = self.config["patch_size"]
         self.normalize = self.config["normalize"]
         self.embedding_function = ResNetV2Block(features = self.config["embedding_dim"])
-        self.row_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2)*3)
-        self.col_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2)*3)
+        self.row_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2))
+        self.col_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2))
 
     def __call__(self, image, key, train=True):
         """
         Args:
             images (jax.numpy.ndarray): the images to be tokenized (num_batches, num_sequences, num_images, H, W, C).
         """
+        # resize the image to the desired size
+        if image.shape != self.image_size:
+            warnings.warn(
+                "The image is not the desired size. Automatically resizing image."
+            )
+            image = jax.image.resize(image, self.image_size, method="lanczos3")
+
 
         # convert image into patches
         patches = image_to_patches(image, self.patch_size, self.normalize)
@@ -207,7 +229,7 @@ class ImageTokenizer(nn.Module):
                 patch_embeddings.shape,
                 (
                     (image.shape[0]//self.patch_size)**2, # patches per image
-                    (self.patch_size**2)*image.shape[-1] # embedding_dim
+                    (self.patch_size**2) # embedding_dim
                 )
                 )
 
