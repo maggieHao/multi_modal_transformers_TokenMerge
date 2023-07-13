@@ -162,7 +162,7 @@ class ResNetV2Block(nn.Module):
                 padding=self.padding)(out)
         
         #flatten output
-        out = jnp.ravel(out)
+        out = jnp.reshape(out, (*out.shape[:2], -1))
         
         return out
 
@@ -198,21 +198,22 @@ class ImageTokenizer(nn.Module):
         Args:
             images (jax.numpy.ndarray): the images to be tokenized (num_batches, num_sequences, num_images, H, W, C).
         """
+        # flatten batch and sequence dimensions
+        image_flat = jnp.reshape(image, (-1, *image.shape[-3:]))
+        
         # resize the image to the desired size
-        if image.shape != self.image_size:
+        if image_flat.shape[-3:] != self.image_size:
             warnings.warn(
                 "The image is not the desired size. Automatically resizing image."
             )
-            image = jax.image.resize(image, self.image_size, method="lanczos3")
-
+            image_flat = jax.vmap(jax.image.resize, in_axes=(0, None, None, None))(image_flat, self.image_size, "lanczos3", True)
 
         # convert image into patches
-        patches = image_to_patches(image, self.patch_size, self.normalize)
-
+        patches = jax.vmap(image_to_patches, in_axes=(0, None, None), out_axes=0)(image_flat, self.patch_size, self.normalize)
+        
         chex.assert_equal(
-                patches.shape,
+                patches.shape[-3:],
                 (
-                    (image.shape[0]//self.patch_size)**2, # patches per image
                     self.patch_size, # patch_dim
                     self.patch_size, # patch_dim
                     image.shape[-1] # channels_dim
@@ -220,35 +221,34 @@ class ImageTokenizer(nn.Module):
                 )
 
         # create patch embeddings
-        def embed_patch(patch):
-            return self.embedding_function(patch)
+        patch_embeddings = self.embedding_function(patches)
 
-        patch_embeddings = jax.vmap(embed_patch)(patches)
-        
-        chex.assert_equal(
-                patch_embeddings.shape,
-                (
-                    (image.shape[0]//self.patch_size)**2, # patches per image
-                    (self.patch_size**2) # embedding_dim
-                )
-                )
+        #chex.assert_equal(
+        #        patch_embeddings.shape[-1],
+        #        (
+                    #(image.shape[0]//self.patch_size)**2, # patches per image
+        #            (self.patch_size**2) # embedding_dim
+        #        )
+        #        )
 
         # create patch position embeddings
-        row_positions, col_positions = encode_patch_position(image, self.patch_size, key, train=train)
+        # TODO specify multiple keys
+        keys = jax.random.split(key, image_flat.shape[0])
+        row_positions, col_positions = jax.vmap(encode_patch_position, in_axes=(0, None, 0, None))(image_flat, self.patch_size, keys, train)
         
-        def embed_row(row):
-            return self.row_embeddings(row)
-
-        def embed_col(col):
-            return self.col_embeddings(col)
-        
-        row_position_embeddings = jax.vmap(embed_row)(row_positions)
-        col_position_embeddings = jax.vmap(embed_col)(col_positions)
+        row_position_embeddings = self.row_embeddings(row_positions)
+        col_position_embeddings = self.col_embeddings(col_positions)
 
         chex.assert_equal(
                 row_position_embeddings.shape,
                 patch_embeddings.shape
                 )
+        
+        # add position embeddings to patch embeddings (broadcasting)
+#        patch_embeddings = patch_embeddings +
 
-        return patch_embeddings + row_position_embeddings + col_position_embeddings
+        # reshape back to original shape
+        patch_embeddings = jnp.reshape(patch_embeddings, (image.shape[0], image.shape[1], -1))
+
+        return patch_embeddings
 

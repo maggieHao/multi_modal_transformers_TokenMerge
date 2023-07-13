@@ -12,6 +12,10 @@ import jax.numpy as jnp
 import flax.linen as nn
 from jax import random
 
+# multi-processing
+import multiprocessing as mp
+from multiprocessing import Pool
+
 
 ############################
 # Generate Corpus/Vocab
@@ -45,6 +49,13 @@ def generate_move_puzzle_corpus():
 # Basic Tokenizer
 ############################
 
+def _tokenize(text, word2idx):
+    """Tokenize text."""
+    # split by space
+    tokens = text.decode().split(" ")
+    # convert each token to index
+    return jnp.array([word2idx[token] for token in tokens])
+
 class BasicTokenizer:
     """
     Basic tokenizer.
@@ -60,11 +71,24 @@ class BasicTokenizer:
         self.word2idx = {word: idx for idx, word in enumerate(set(vocab))}
         self.vocab_size = len(self.word2idx)
 
-    def tokenize(self, text):
+
+    def _tokenize(self, text):
+        """Tokenize text."""
         # split by space
-        tokens = text.split(" ")
+        tokens = text.decode().split(" ")
         # convert each token to index
         return jnp.array([self.word2idx[token] for token in tokens])
+    
+    def tokenize(self, text):
+        """Tokenize text."""
+        # for each text in list of texts
+        # in parallel decode text to indices
+        # use multi-processing
+        with Pool(mp.cpu_count()) as p:
+            indices = p.map(self._tokenize, text)
+        return indices
+        
+
 
 @dataclasses.dataclass
 class BasicTextTokenizeOp:
@@ -119,12 +143,8 @@ class BasicTextTokenizer(nn.Module):
         
         # convert text to indices
         text = self.tokenizer.tokenize(text)
-
-        def embed_word(word):
-            return self.embedding(word)
-
-        # generate word embeddings
-        word_embeddings = jax.vmap(embed_word)(text)
+        text = jnp.stack(text)
+        word_embeddings = self.embedding(text)
 
         return word_embeddings
 
