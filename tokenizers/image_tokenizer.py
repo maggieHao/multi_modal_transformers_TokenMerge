@@ -192,8 +192,9 @@ class ImageTokenizer(nn.Module):
         self.embedding_function = ResNetV2Block(features = self.config["num_feature_maps"])
         self.row_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2)*16)
         self.col_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2)*16)
+        self.rng_collection = self.config["rng_collection"]
 
-    def __call__(self, image, key, train=True):
+    def __call__(self, image, train=True):
         """
         Args:
             images (jax.numpy.ndarray): the images to be tokenized (num_batches, num_sequences, num_images, H, W, C).
@@ -204,7 +205,7 @@ class ImageTokenizer(nn.Module):
         # resize the image to the desired size
         if image_flat.shape[-3:] != self.image_size:
             warnings.warn(
-                "The image is not the desired size. Automatically resizing image."
+                f"The image is not the desired size. Automatically resizing image. Image size: {image_flat.shape[-3:]}; Desired size: {self.image_size}."
             )
             image_flat = jax.vmap(jax.image.resize, in_axes=(0, None, None, None))(image_flat, self.image_size, "nearest", True)
 
@@ -233,6 +234,7 @@ class ImageTokenizer(nn.Module):
 
         # create patch position embeddings
         # TODO specify multiple keys
+        key = self.make_rng(self.rng_collection)
         keys = jax.random.split(key, image_flat.shape[0])
         row_positions, col_positions = jax.vmap(encode_patch_position, in_axes=(0, None, 0, None))(image_flat, self.patch_size, keys, train)
         

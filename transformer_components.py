@@ -39,36 +39,42 @@ class MLPBlock(nn.Module):
         return outputs
 
 
-class DecoderBlock(nn.Module):
-    config: dict
+class Encoder1DBlock(nn.Module):
+  """Transformer encoder layer.
 
-    @nn.compact
-    def __call__(self, inputs):
-        attention_config = self.config["self_attention_block"]
-        dot_attention_config = self.config["multihead_dot_product_attention_block"]
-        mlp_config = self.config["mlp_block"]
+  Attributes:
+    config: TransformerConfig dataclass containing hyperparameters.
+  """
+  config: dict
 
-        # Encoder-Decoder Attention Block
-        x = nn.MultiHeadDotProductAttention(
-            num_heads=dot_attention_config["num_heads"],
-            qkv_features=dot_attention_config["qkv_features"],
-            kernel_init=nn.initializers.normal(),
-            bias_init=nn.initializers.constant(0.0),
-            use_bias=dot_attention_config["use_bias"],
-            broadcast_dropout=dot_attention_config["broadcast_dropout"],
-            dropout_rate=dot_attention_config["dropout_rate"],
-            deterministic=dot_attention_config["deterministic"],
-            decode=True,
-        )(inputs_q=inputs, inputs_kv=inputs)
-        x = nn.Dropout(attention_config["dropout_rate"])(x, deterministic=False)
-        # residual connection
-        x = x + inputs
+  @nn.compact
+  def __call__(self,
+               inputs,
+               mask=None):
+    """Applies Encoder1DBlock module.
 
-        # Feed Forward Block
-        y = nn.LayerNorm()(x)
-        y = MLPBlock(config=mlp_config)(y)
-        # residual connection
-        outputs = y + x
+    Args:
+      inputs: input data.
+      mask: self-attention mask.
 
-        return outputs
+    Returns:
+      output after transformer encoder block.
+    """
+    config = self.config
+
+    # Attention block.
+    x = nn.LayerNorm()(inputs)
+    x = nn.SelfAttention(
+        num_heads=config.num_heads,
+        qkv_features=config.qkv_dim)(x, mask)
+
+    x = nn.Dropout(rate=config.dropout_rate)(
+        x, deterministic=config.deterministic)
+    x = x + inputs
+
+    # MLP block.
+    y = nn.LayerNorm()(x)
+    y = MLPBlock(config=config)(y)
+
+    return x + y
 

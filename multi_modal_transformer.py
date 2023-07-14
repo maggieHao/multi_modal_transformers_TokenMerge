@@ -3,12 +3,14 @@ Transformer architecture implementation.
 Heavily inspired by: https://github.com/google/flax/blob/main/examples/wmt/models.py
 """
 
+# deep learning framework
 import jax
 import jax.numpy as jnp
 import chex
 import flax.linen as nn
+import einops as e
 
-# import custom tokenizers
+# custom tokenizers
 from tokenizers.value_tokenizer import ActionTokenizer
 from tokenizers.image_tokenizer import ImageTokenizer
 from tokenizers.text_tokenizer import (
@@ -16,50 +18,47 @@ from tokenizers.text_tokenizer import (
     BasicTextTokenizer,
 )
 
+# transformer modules
+from transformer_components import Encoder1DBlock
+
 class ConceptLearner(nn.Module):
     """A multi-modal decoder-only Transformer architecture."""
     config: dict
 
-    def setup(self):
-        # text tokenizer
-        text_tokenizer = BasicTokenizer(
-            vocab_dir=self.config.model.executor.text_tokenizer.vocab_dir
-            )
-        self.text_tokenizer = BasicTextTokenizer(
-            config = self.config.model.executor.text_tokenizer, tokenizer=text_tokenizer
-        )
-
-        # image tokenizer
-        self.image_tokenizer = ImageTokenizer(config = self.config.model.executor.image_tokenizer)
-        
-        # action tokenizer
-        self.action_tokenizer = ActionTokenizer(config = self.config.model.executor.action_tokenizer)
-
-        # learnt positional embeddings for observations
-        self.positional_embedding = nn.Embed(
-            num_embeddings=21,
-            features=self.config.model.executor.token_embedding_dim,
-        )
-    
     # TODO: move parameters to single batch parameter
-    def __call__(self, text, images, actions, key):
+    @nn.compact
+    def __call__(self, text, images, actions):
         
         ### Tokenization + Input Embeddings ###
 
         ## text embeddings
-        text_embeddings = self.text_tokenizer(text)
+        text_tokenizer = BasicTokenizer(
+            vocab_dir=self.config.model.executor.text_tokenizer.vocab_dir
+            )
+        text_tokenizer = BasicTextTokenizer(
+            config = self.config.model.executor.text_tokenizer, tokenizer=text_tokenizer
+        )
+        text_embeddings = text_tokenizer(text)
 
         ## image embeddings
-        image_embeddings = self.image_tokenizer(images, key)
+        image_tokenizer = ImageTokenizer(config = self.config.model.executor.image_tokenizer)
+        image_embeddings = image_tokenizer(images)
 
         ## action embeddings
-        action_embeddings = self.action_tokenizer(actions)
+        action_tokenizer = ActionTokenizer(config = self.config.model.executor.action_tokenizer)
+        action_embeddings = action_tokenizer(actions)
+
+        ## positional embeddings
+        positional_embedding = nn.Embed(
+            num_embeddings=21,
+            features=self.config.model.executor.token_embedding_dim,
+        )
 
         ## observation embeddings
         #observation_embeddings = self.positional_embedding(jnp.arange(21))
 
         # concatenate text, image, action and observation embeddings
-
+        
         # interleave image and action embeddings such that image, action, image, action, ...
         def interweave_embeddings(image_embeddings, action_embeddings):
             batch_size = image_embeddings.shape[0]
@@ -84,7 +83,21 @@ class ConceptLearner(nn.Module):
         ### Transformer Self Attention ###
 
         # generate attention mask for padding tokens
-        
-        #mask = nn.make_attention_mask()
+        attention_mask_input = e.rearrange(
+                e.repeat(
+                    jnp.where(actions == 0, 0, 1), 
+                    'batch seq -> batch seq repeats', 
+                    repeats=5) # 5 patches per image + action (TODO: replace with config param)
+               , 'batch seq repeats -> batch (seq repeats)')
+        # add in 1's for text tokens
+        attention_mask_input = jnp.concatenate((jnp.ones((attention_mask_input.shape[0], text_embeddings.shape[1])), attention_mask_input), axis=1)
+        attention_mask = nn.make_attention_mask(attention_mask_input > 0, attention_mask_input > 0)
+        attention_mask = e.repeat(attention_mask, 'batch heads q k -> batch (heads repeats) q k', repeats=4)
 
-        return embeddings 
+        # pass through self attention layer
+        x = Encoder1DBlock(self.config.model.executor.self_attention_1)(embeddings, mask=attention_mask)
+
+        print(x.shape)
+        print(attention_mask.shape)
+
+        return x
