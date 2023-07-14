@@ -40,43 +40,57 @@ class ConceptLearner(nn.Module):
             features=self.config.model.executor.observation_embeddings.embedding_dim,
         )
 
+        # padding token
+        self.padding_embedding = nn.Embed(
+            num_embeddings=1,
+            features=self.config.model.executor.observation_embeddings.embedding_dim,
+        )
+
     def __call__(self, text, images, actions):
         
+        ### Tokenization + Input Embeddings ###
+
         ## text embeddings
         text_embeddings = self.text_tokenizer(text)
 
+        ## image embeddings
+        image_embeddings = self.image_tokenizer(images)
+
+        ## action embeddings
+        action_embeddings = self.action_tokenizer(actions)
+
         ## observation embeddings
-        def embed_observation(image, action):
-            # embed image
-            image_embedding = self.image_tokenizer(image)
+        #observation_embeddings = self.positional_embedding(jnp.arange(21))
 
-            # embed action
-            action_embedding = self.action_tokenizer(action)
-            
-            # concatenate embeddings
-            observation_embedding = jnp.concatenate([image_embedding, action_embedding], axis=1)
+        # concatenate text, image, action and observation embeddings
 
-            # add learnable positional embeddings
-            positional_embedding = self.positional_embedding(jnp.arange(21))
-            observation_embedding = observation_embedding + positional_embedding
+        # interleave image and action embeddings such that image, action, image, action, ...
+        def interweave_embeddings(image_embeddings, action_embeddings):
+            batch_size = image_embeddings.shape[0]
+            feature_size = image_embeddings.shape[-1]
+            num_tokens = image_embeddings.shape[1] + action_embeddings.shape[1]
 
-            return observation_embedding
-        
-        observation_embeddings = jax.vmap(embed_observation)(images, actions)
+            # interleave image and action embeddings
+            interleaved_embeddings = jnp.zeros((batch_size, num_tokens, feature_size))
+            interleaved_embeddings[::2, :] = image_embeddings
+            interleaved_embeddings[1::2, :] = action_embeddings
 
-        # concatenate text and observation embeddings
-        embeddings = jnp.concatenate([text_embeddings, observation_embeddings], axis=1)
+            return interleaved_embeddings
 
-        # pad embeddings to max length
-        
-        # pass embeddings through transformer blocks
-        for lyr in range(self.config["num_blocks"]):
-            embeddings = DecoderBlock(config=config)(embeddings)
+        # interleave image and action embeddings
+        interleaved_embeddings = interweave_embeddings(image_embeddings, action_embeddings)
 
-        # pass through final layer norm
-        outputs = nn.LayerNorm()(x)
+        # concatenate text and interleaved embeddings
+        embeddings = jnp.concatenate((text_embeddings, interleaved_embeddings), axis=1)
 
-        # this should be a distribution over all possible actions
-        logits = nn.Dense()(outputs)
+        # add padding token
+        pad_length = self.config.model.executor.max_seq_len - embeddings.shape[1]
+        padding = jnp.zeros((embeddings.shape[0], pad_length))
+        padding = self.padding_embedding(padding)
+        embeddings = jnp.concatenate((embeddings, padding), axis=1)
 
-        return logits 
+        print(embeddings.shape)
+
+        ### Transformer Self Attention ###
+
+        return embeddings 

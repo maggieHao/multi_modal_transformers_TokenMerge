@@ -49,7 +49,7 @@ def image_to_patches(image, patch_size, normalize):
             "The image is not divisible by the patch size. Automatically resizing image."
         )
         new_dim = h // patch_size
-        image = jax.image.resize(image, (new_dim, new_dim), method="bilinear")
+        image = jax.image.resize(image, (new_dim, new_dim), method="nearest")
 
     # create an array of patches
     patches = einops.rearrange(
@@ -156,7 +156,7 @@ class ResNetV2Block(nn.Module):
         out = y+residual
         
         # map to embedding dimension
-        out = self.conv(features=1,
+        out = self.conv(features=16,
                 kernel_size=(1,1),
                 strides=(1,1),
                 padding=self.padding)(out)
@@ -190,8 +190,8 @@ class ImageTokenizer(nn.Module):
         self.patch_size = self.config["patch_size"]
         self.normalize = self.config["normalize"]
         self.embedding_function = ResNetV2Block(features = self.config["num_feature_maps"])
-        self.row_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2))
-        self.col_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2))
+        self.row_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2)*16)
+        self.col_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2)*16)
 
     def __call__(self, image, key, train=True):
         """
@@ -206,7 +206,7 @@ class ImageTokenizer(nn.Module):
             warnings.warn(
                 "The image is not the desired size. Automatically resizing image."
             )
-            image_flat = jax.vmap(jax.image.resize, in_axes=(0, None, None, None))(image_flat, self.image_size, "lanczos3", True)
+            image_flat = jax.vmap(jax.image.resize, in_axes=(0, None, None, None))(image_flat, self.image_size, "nearest", True)
 
         # convert image into patches
         patches = jax.vmap(image_to_patches, in_axes=(0, None, None), out_axes=0)(image_flat, self.patch_size, self.normalize)
@@ -248,7 +248,7 @@ class ImageTokenizer(nn.Module):
 #        patch_embeddings = patch_embeddings +
 
         # reshape back to original shape
-        patch_embeddings = jnp.reshape(patch_embeddings, (image.shape[0], image.shape[1], -1))
+        patch_embeddings = jnp.reshape(patch_embeddings, (image.shape[0], image.shape[1] * (image_flat.shape[-2]//self.patch_size) ** 2, -1))
 
         return patch_embeddings
 
