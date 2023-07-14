@@ -4,6 +4,7 @@ Heavily inspired by: https://github.com/google/flax/blob/main/examples/wmt/model
 """
 
 import jax
+import jax.numpy as jnp
 import chex
 import flax.linen as nn
 
@@ -25,7 +26,7 @@ class ConceptLearner(nn.Module):
             vocab_dir=self.config.model.executor.text_tokenizer.vocab_dir
             )
         self.text_tokenizer = BasicTextTokenizer(
-            config=cfg.model.executor.text_tokenizer, tokenizer=text_tokenizer
+            config = self.config.model.executor.text_tokenizer, tokenizer=text_tokenizer
         )
 
         # image tokenizer
@@ -37,16 +38,11 @@ class ConceptLearner(nn.Module):
         # learnt positional embeddings for observations
         self.positional_embedding = nn.Embed(
             num_embeddings=21,
-            features=self.config.model.executor.observation_embeddings.embedding_dim,
+            features=self.config.model.executor.token_embedding_dim,
         )
-
-        # padding token
-        self.padding_embedding = nn.Embed(
-            num_embeddings=1,
-            features=self.config.model.executor.observation_embeddings.embedding_dim,
-        )
-
-    def __call__(self, text, images, actions):
+    
+    # TODO: move parameters to single batch parameter
+    def __call__(self, text, images, actions, key):
         
         ### Tokenization + Input Embeddings ###
 
@@ -54,7 +50,7 @@ class ConceptLearner(nn.Module):
         text_embeddings = self.text_tokenizer(text)
 
         ## image embeddings
-        image_embeddings = self.image_tokenizer(images)
+        image_embeddings = self.image_tokenizer(images, key)
 
         ## action embeddings
         action_embeddings = self.action_tokenizer(actions)
@@ -67,15 +63,16 @@ class ConceptLearner(nn.Module):
         # interleave image and action embeddings such that image, action, image, action, ...
         def interweave_embeddings(image_embeddings, action_embeddings):
             batch_size = image_embeddings.shape[0]
+            num_images = image_embeddings.shape[1]
+            tokens_per_image = image_embeddings.shape[2]
             feature_size = image_embeddings.shape[-1]
-            num_tokens = image_embeddings.shape[1] + action_embeddings.shape[1]
-
+            total_tokens = (image_embeddings.shape[1]*image_embeddings.shape[2]) + action_embeddings.shape[1]
+            
             # interleave image and action embeddings
-            interleaved_embeddings = jnp.zeros((batch_size, num_tokens, feature_size))
-            interleaved_embeddings[::2, :] = image_embeddings
-            interleaved_embeddings[1::2, :] = action_embeddings
+            embeddings = jax.lax.concatenate((image_embeddings, jnp.expand_dims(action_embeddings, axis=2)), dimension=2)
+            embeddings = jnp.reshape(embeddings, (batch_size, total_tokens, feature_size))
 
-            return interleaved_embeddings
+            return embeddings
 
         # interleave image and action embeddings
         interleaved_embeddings = interweave_embeddings(image_embeddings, action_embeddings)
@@ -83,14 +80,11 @@ class ConceptLearner(nn.Module):
         # concatenate text and interleaved embeddings
         embeddings = jnp.concatenate((text_embeddings, interleaved_embeddings), axis=1)
 
-        # add padding token
-        pad_length = self.config.model.executor.max_seq_len - embeddings.shape[1]
-        padding = jnp.zeros((embeddings.shape[0], pad_length))
-        padding = self.padding_embedding(padding)
-        embeddings = jnp.concatenate((embeddings, padding), axis=1)
-
-        print(embeddings.shape)
-
+        
         ### Transformer Self Attention ###
+
+        # generate attention mask for padding tokens
+        
+        #mask = nn.make_attention_mask()
 
         return embeddings 

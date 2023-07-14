@@ -15,7 +15,7 @@ import flax.linen as nn
 from jax import random
 
 # import custom utils for logging
-from ..utils.logger import get_logger
+from utils.logger import get_logger
 
 ModuleDef = Any
 LOG = get_logger(__name__)
@@ -248,7 +248,7 @@ class ImageTokenizer(nn.Module):
 #        patch_embeddings = patch_embeddings +
 
         # reshape back to original shape
-        patch_embeddings = jnp.reshape(patch_embeddings, (image.shape[0], image.shape[1] * (image_flat.shape[-2]//self.patch_size) ** 2, -1))
+        patch_embeddings = jnp.reshape(patch_embeddings, (image.shape[0], image.shape[1], (image_flat.shape[-2]//self.patch_size) ** 2, -1))
 
         return patch_embeddings
 
