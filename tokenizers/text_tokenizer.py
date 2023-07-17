@@ -139,14 +139,25 @@ class BasicTextTokenizer(nn.Module):
                 features=self.config["embedding_dim"],
                 )
 
+        self.position_embedding = nn.Embed(
+                num_embeddings=self.config["max_text_len"],
+                features=self.config["embedding_dim"],
+                )
+
     def __call__(self, text):
         
         # convert text to indices
         text = self.tokenizer.tokenize(text)
+
+        # embed text
         text = jnp.stack(text)
         word_embeddings = self.embedding(text)
+        
+        # add position embedding
+        positions = jnp.arange(text.shape[1])
+        position_embeddings = self.position_embedding(positions)
 
-        return word_embeddings
+        return word_embeddings + position_embeddings
 
 
 if __name__=="__main__":

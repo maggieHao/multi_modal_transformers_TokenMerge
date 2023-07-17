@@ -21,7 +21,7 @@ from tokenizers.text_tokenizer import (
 # transformer modules
 from transformer_components import Encoder1DBlock
 
-def combine_embeddings(action_embeddings, image_embeddings, text_embeddings):
+def combine_embeddings(action_embeddings, image_embeddings, text_embeddings, obs_pos_embeddings):
     """
     Combines action, image, and text embeddings into a single embedding vector.
     """
@@ -33,6 +33,9 @@ def combine_embeddings(action_embeddings, image_embeddings, text_embeddings):
     # perform interleaving
     embeddings = jax.lax.concatenate((image_embeddings, jnp.expand_dims(action_embeddings, axis=2)), dimension=2)
     embeddings = jnp.reshape(embeddings, (batch_size, total_tokens, feature_size))
+    
+    # add positional embeddings
+    embeddings = embeddings + obs_pos_embeddings
 
     # concatenate text and interleaved embeddings
     embeddings = jnp.concatenate((text_embeddings, embeddings), axis=1)
@@ -86,7 +89,6 @@ class ConceptLearner(nn.Module):
         ### Tokenization + Generate Input Embeddings ###
 
         ## text embeddings ##
-
         text_tokenizer = BasicTokenizer(
             vocab_dir=self.config.text_tokenizer.vocab_dir
             )
@@ -105,11 +107,24 @@ class ConceptLearner(nn.Module):
         action_tokenizer = ActionTokenizer(config = self.config.action_tokenizer)
         action_embeddings = action_tokenizer(actions)
 
-        ## positional embeddings
+        ## positional encoding of observation tokens ##
+        (batch_size, num_images, tokens_per_image, _) = image_embeddings.shape
+        num_actions = action_embeddings.shape[1]
+        total_tokens = (num_images*tokens_per_image) + num_actions
+        tokens_per_obs = tokens_per_image + 1
+
+        obs_encoder = nn.Embed(
+                tokens_per_obs,
+                self.config.token_embedding_dim,
+                )
+        
+        obs_positions = jnp.arange(tokens_per_obs)
+        obs_positions_batch = e.repeat(obs_positions, 'observation -> batch (seq observation)', batch=batch_size, seq=total_tokens//tokens_per_obs) # one image per observation
+        obs_pos_embeddings = obs_encoder(obs_positions_batch)
 
         
         ## combine embeddings ##
-        combined_embeddings = combine_embeddings(action_embeddings, image_embeddings, text_embeddings)
+        combined_embeddings = combine_embeddings(action_embeddings, image_embeddings, text_embeddings, obs_pos_embeddings)
 
         
         ### Transformer Self Attention ###
