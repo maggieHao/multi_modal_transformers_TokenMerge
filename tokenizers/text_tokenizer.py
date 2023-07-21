@@ -11,6 +11,7 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 from jax import random
+import numpy as np
 
 # multi-processing
 import multiprocessing as mp
@@ -49,13 +50,6 @@ def generate_move_puzzle_corpus():
 # Basic Tokenizer
 ############################
 
-def _tokenize(text, word2idx):
-    """Tokenize text."""
-    # split by space
-    tokens = text.decode().split(" ")
-    # convert each token to index
-    return jnp.array([word2idx[token] for token in tokens])
-
 class BasicTokenizer:
     """
     Basic tokenizer.
@@ -72,31 +66,11 @@ class BasicTokenizer:
         self.vocab_size = len(self.word2idx)
 
 
-    def _tokenize(self, text):
-        """Tokenize text."""
-        # split by space
-        tokens = text.decode().split(" ")
-        # convert each token to index
-        return jnp.array([self.word2idx[token] for token in tokens])
-    
     def tokenize(self, text):
         """Tokenize text."""
-        # for each text in list of texts
-        # in parallel decode text to indices
-        # use multi-processing
-        with Pool(mp.cpu_count()) as p:
-            indices = p.map(self._tokenize, text)
-        return indices
-        
-
-
-@dataclasses.dataclass
-class BasicTextTokenizeOp:
-    tokenizer: BasicTokenizer
-
-    def __call__(self, text):
-        return self.tokenizer.tokenize(text)
-
+        # convert each token to index
+        return np.array([self.word2idx[token] for token in text])
+    
 ############################
 # Sentence Piece Tokenizer 
 ############################
@@ -112,14 +86,6 @@ def train_sentencepiece_model(input_file, model_prefix, vocab_size):
             character_coverage=1.0,
             model_type="unigram",
             )
-
-@dataclasses.dataclass
-class SPTextTokenizeOp:
-    tokenizer: spm.SentencePieceProcessor
-
-    def __call__(self, text):
-        return self.tokenizer.encode(text)
-
 
 ############################
 # Text Embedding
@@ -144,17 +110,14 @@ class BasicTextTokenizer(nn.Module):
                 features=self.config["embedding_dim"],
                 )
 
-    def __call__(self, text):
+    def __call__(self, tokens):
         
-        # convert text to indices
-        text = self.tokenizer.tokenize(text)
 
         # embed text
-        text = jnp.stack(text)
-        word_embeddings = self.embedding(text)
+        word_embeddings = self.embedding(tokens)
         
         # add position embedding
-        positions = jnp.arange(text.shape[1])
+        positions = jnp.arange(tokens.shape[1])
         position_embeddings = self.position_embedding(positions)
 
         return word_embeddings + position_embeddings

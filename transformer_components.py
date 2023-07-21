@@ -26,12 +26,14 @@ class MLPBlock(nn.Module):
         x = nn.Dropout(
             rate=self.config["dropout_rate"],
         )(x, deterministic=False)
+
         x = nn.Dense(
             features=self.config["hidden_size"],
             use_bias=self.config["use_bias"],
             kernel_init=nn.initializers.normal(),
             bias_init=nn.initializers.constant(0.0),
         )(x)
+            
         outputs = nn.Dropout(
             rate=self.config["dropout_rate"],
         )(x, deterministic=False)

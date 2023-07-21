@@ -124,7 +124,7 @@ class ConceptLearner(nn.Module):
 
         
         ## combine embeddings ##
-        combined_embeddings = combine_embeddings(action_embeddings, image_embeddings, text_embeddings, obs_pos_embeddings)
+        x = combine_embeddings(action_embeddings, image_embeddings, text_embeddings, obs_pos_embeddings)
 
         
         ### Transformer Self Attention ###
@@ -133,13 +133,16 @@ class ConceptLearner(nn.Module):
         attention_mask = generate_attention_mask(actions, image_embeddings, text_embeddings, self.config.self_attention.num_heads)
 
         # pass through self attention layer
-        for attention_block in range(self.config.self_attention.num_blocks):
+        for idx, attention_block in enumerate(range(self.config.self_attention.num_blocks)):
             x = Encoder1DBlock(self.config.self_attention)(
-                    combined_embeddings, 
+                    x, 
                     mask=attention_mask,
                     )
 
-        print(x.shape)
-        print(attention_mask.shape)
+        # calculate logits with linear layer
+        x = e.rearrange(x, 'batch tokens features -> batch (tokens features)')
+        x = nn.Dense(
+                self.config.linear_out.output_dim,
+                )(x)
 
         return x
