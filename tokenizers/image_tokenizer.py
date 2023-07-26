@@ -1,6 +1,7 @@
 """
 Image tokenizer implementation that aligns with Gato paper.
 """
+import sys
 
 import dataclasses
 import warnings
@@ -110,59 +111,55 @@ def encode_patch_position(image, patch_size, key, train=True):
 # Image Embedding
 ############################
 
-
-### GATO RESNET (Incomplete) ###
-
 # https://github.com/google/flax/blob/main/examples/imagenet/models.py
 class ResNetV2Block(nn.Module):
     """
     Note: fixing parameter defaults to match Gato.
     """
-    features: int
-    strides: Tuple[int, int] = (1, 1)
-    kernel_size: Tuple[int, int] = (3, 3)
-    padding: str = "SAME"
-    conv: ModuleDef = nn.Conv
-    normalization: ModuleDef = nn.GroupNorm
-    activation: Callable = nn.gelu
+    config: dict
 
     @nn.compact
     def __call__(self, x):
         # start with convolution projection
-        x = self.conv(features=self.features,
-                kernel_size=self.kernel_size,
-                strides=self.strides,
-                padding=self.padding)(x)
-        x = self.normalization()(x)
-        x = self.activation(x)
+        x = nn.Conv(
+                features=self.config.token_embedding.input_projection.features,
+                kernel_size=self.config.token_embedding.input_projection.kernel_size,
+                strides=self.config.token_embedding.input_projection.strides,
+                padding=self.config.token_embedding.input_projection.padding,
+                )(x)
+        x = nn.GroupNorm()(x)
+        x = nn.gelu(x)
 
         # resnetv2block
         residual = x
 
-        y = self.normalization()(x)
-        y = self.activation(y)
-        y = self.conv(features=self.features,
-                kernel_size=self.kernel_size, 
-                strides=self.strides, 
-                padding=self.padding)(y)
+        y = nn.GroupNorm()(x)
+        y = nn.gelu(y)
+        y = nn.Conv(
+                features=self.config.token_embedding.resnet_block.features,
+                kernel_size=self.config.token_embedding.resnet_block.kernel_size,
+                strides=self.config.token_embedding.resnet_block.strides,
+                padding=self.config.token_embedding.resnet_block.padding,
+                )(y)
         
-        y = self.normalization()(y)
-        y = self.activation(y)
-        y = self.conv(features=self.features,
-                kernel_size=self.kernel_size, 
-                strides=self.strides, 
-                padding=self.padding)(y)
+        y = nn.GroupNorm()(y)
+        y = nn.gelu(y)
+        y = nn.Conv(
+                features=self.config.token_embedding.resnet_block.features,
+                kernel_size=self.config.token_embedding.resnet_block.kernel_size,
+                strides=self.config.token_embedding.resnet_block.strides,
+                padding=self.config.token_embedding.resnet_block.padding,
+                )(y)
   
         out = y+residual
         
         # map to embedding dimension
-        out = self.conv(features=16,
-                kernel_size=(1,1),
-                strides=(1,1),
-                padding=self.padding)(out)
+        out = nn.GroupNorm()(out)
+        out = nn.gelu(out)
         
         #flatten output
         out = jnp.reshape(out, (*out.shape[:2], -1))
+        out = nn.Dense(features=self.config.embedding_dim)(out)
         
         return out
 
@@ -181,17 +178,13 @@ class ImageTokenizer(nn.Module):
 
     config: dict
 
-    @property
-    def tokens_per_image(self):
-        raise NotImplementedError
-
     def setup(self):
         self.image_size = self.config["image_size"]
         self.patch_size = self.config["patch_size"]
         self.normalize = self.config["normalize"]
-        self.embedding_function = ResNetV2Block(features = self.config["num_feature_maps"])
-        self.row_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2)*16)
-        self.col_embeddings = nn.Embed(self.config["position_interval"], (self.patch_size**2)*16)
+        self.embedding_function = ResNetV2Block(config=self.config)
+        self.row_embeddings = nn.Embed(self.config["position_interval"], self.config.embedding_dim)
+        self.col_embeddings = nn.Embed(self.config["position_interval"], self.config.embedding_dim)
         self.rng_collection = self.config["rng_collection"]
 
     def __call__(self, image, train=True):
@@ -199,15 +192,16 @@ class ImageTokenizer(nn.Module):
         Args:
             images (jax.numpy.ndarray): the images to be tokenized (num_batches, num_sequences, num_images, H, W, C).
         """
-        # flatten batch and sequence dimensions
+        # get dimensions
+        batch_size, num_images, h, w, c = image.shape
+        num_tokens = (h // self.patch_size) * (w // self.patch_size)
+
+        # flatten batch and sequence dimensions for readability of vmapping
         image_flat = jnp.reshape(image, (-1, *image.shape[-3:]))
         
         # resize the image to the desired size
         if image_flat.shape[-3:] != self.image_size:
-            warnings.warn(
-                f"The image is not the desired size. Automatically resizing image. Image size: {image_flat.shape[-3:]}; Desired size: {self.image_size}."
-            )
-            image_flat = jax.vmap(jax.image.resize, in_axes=(0, None, None, None))(image_flat, self.image_size, "nearest", True)
+            sys.exit("Input image is not the correct size.")
 
         # convert image into patches
         patches = jax.vmap(image_to_patches, in_axes=(0, None, None), out_axes=0)(image_flat, self.patch_size, self.normalize)
@@ -215,27 +209,19 @@ class ImageTokenizer(nn.Module):
         chex.assert_equal(
                 patches.shape[-3:],
                 (
-                    self.patch_size, # patch_dim
-                    self.patch_size, # patch_dim
-                    image.shape[-1] # channels_dim
+                    self.patch_size,
+                    self.patch_size, 
+                    c,
                 )
                 )
 
         # create patch embeddings
         patch_embeddings = self.embedding_function(patches)
 
-        #chex.assert_equal(
-        #        patch_embeddings.shape[-1],
-        #        (
-                    #(image.shape[0]//self.patch_size)**2, # patches per image
-        #            (self.patch_size**2) # embedding_dim
-        #        )
-        #        )
 
         # create patch position embeddings
-        # TODO specify multiple keys
         key = self.make_rng(self.rng_collection)
-        keys = jax.random.split(key, image_flat.shape[0])
+        keys = jax.random.split(key, batch_size*num_images)
         row_positions, col_positions = jax.vmap(encode_patch_position, in_axes=(0, None, 0, None))(image_flat, self.patch_size, keys, train)
         
         row_position_embeddings = self.row_embeddings(row_positions)
@@ -247,10 +233,10 @@ class ImageTokenizer(nn.Module):
                 )
         
         # add position embeddings to patch embeddings (broadcasting)
-#        patch_embeddings = patch_embeddings +
+        patch_embeddings = patch_embeddings + row_position_embeddings + col_position_embeddings
 
         # reshape back to original shape
-        patch_embeddings = jnp.reshape(patch_embeddings, (image.shape[0], image.shape[1], (image_flat.shape[-2]//self.patch_size) ** 2, -1))
+        patch_embeddings = jnp.reshape(patch_embeddings, (batch_size, num_images, num_tokens,-1))
 
         return patch_embeddings
 
