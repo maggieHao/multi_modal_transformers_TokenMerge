@@ -26,7 +26,6 @@ class ActionTokenizer(nn.Module):
         )
 
     def __call__(self, action):
-        # TODO: add position embedding
         return self.embedding(action)
 
 
