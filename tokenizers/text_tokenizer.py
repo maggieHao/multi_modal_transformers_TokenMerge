@@ -97,11 +97,10 @@ class BasicTextTokenizer(nn.Module):
     """
 
     config: dict
-    tokenizer: BasicTokenizer
 
     def setup(self):
         self.embedding = nn.Embed(
-                num_embeddings=self.tokenizer.vocab_size,
+                num_embeddings=self.config["vocab_size"],
                 features=self.config["embedding_dim"],
                 )
 
