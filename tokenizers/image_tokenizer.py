@@ -201,6 +201,8 @@ class ImageTokenizer(nn.Module):
         
         # resize the image to the desired size
         if image_flat.shape[-3:] != self.image_size:
+            print("image shape: ", image_flat.shape[-3:])
+            print("image size: ", self.image_size)
             sys.exit("Input image is not the correct size.")
 
         # convert image into patches
