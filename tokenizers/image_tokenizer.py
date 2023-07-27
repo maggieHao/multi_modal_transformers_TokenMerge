@@ -8,7 +8,7 @@ import warnings
 from functools import partial
 from typing import Any, Callable, Sequence, Tuple
 
-import einops
+import einops as e
 import chex
 import jax
 import jax.numpy as jnp
@@ -53,7 +53,7 @@ def image_to_patches(image, patch_size, normalize):
         image = jax.image.resize(image, (new_dim, new_dim), method="nearest")
 
     # create an array of patches
-    patches = einops.rearrange(
+    patches = e.rearrange(
         image, "(h p1) (w p2) c -> (h w) (p1) (p2) (c)", p1=patch_size, p2=patch_size
     )
 
@@ -65,43 +65,49 @@ def image_to_patches(image, patch_size, normalize):
     return patches
 
 
-def encode_patch_position(image, patch_size, key, train=True):
+def encode_patch_position(image, patch_size, position_interval, key, train=True):
     """
     Calculates the patch interval for an image.
     """
     h, w, c = image.shape
     
-    def get_patch_position_encoding(interval_length, start_idx, stop_idx, key):
+    def get_patch_position_encoding(interval_length, position_interval, start_idx, stop_idx, key):
         # normalize patch interval
         start_idx = start_idx / interval_length
         stop_idx = stop_idx / interval_length
 
         # quantize patch interval
-        start_idx = jnp.floor(start_idx * interval_length)
-        stop_idx = jnp.ceil(stop_idx * interval_length)
-    
+        start_idx = jnp.floor(start_idx * position_interval)
+        stop_idx = jnp.floor(stop_idx * position_interval)
 
         if train:
             # sample uniformly from the patch interval
-            return random.randint(key, shape=(1,), minval=start_idx, maxval=stop_idx+1)
+            return random.randint(key, shape=(1,), minval=start_idx, maxval=stop_idx)
         else:
             # use the center of the patch interval
             return (start_idx + stop_idx) // 2
 
-    row_intervals = jnp.arange(0, h+patch_size, patch_size)
-    row_keys = random.split(key, h // patch_size)
-    col_intervals = jnp.arange(0, w+patch_size, patch_size)
-    col_keys = random.split(key, w // patch_size)
-        
-    row_position_encoding = jax.vmap(get_patch_position_encoding, in_axes=(None, 0, 0, 0))(
-            h, row_intervals[:-1], row_intervals[1:], row_keys)
+    # get patch intervals ranges for rows and columns
+    row_intervals = jnp.arange(0, h+1, patch_size)
+    row_keys = random.split(key, (h+1) // patch_size)
+    col_intervals = jnp.arange(0, w+1, patch_size)
+    col_keys = random.split(key, (w+1) // patch_size)
+    
+    # sample patch positions for rows
+    row_position_encoding = jax.vmap(get_patch_position_encoding, in_axes=(None, None, 0, 0, 0))(
+            h, position_interval, row_intervals[:-1], row_intervals[1:], row_keys)
     row_position_encoding = jnp.squeeze(row_position_encoding)
-    row_position_encoding = jnp.repeat(row_position_encoding, w // patch_size, axis=0)
+    # repeat for each column
+    row_position_encoding = e.repeat(row_position_encoding, 'idx -> repeats idx', repeats=(w+1) // patch_size)
+    row_position_encoding = e.rearrange(row_position_encoding, 'repeats idx -> (repeats idx)')
 
-    col_position_encoding = jax.vmap(get_patch_position_encoding, in_axes=(None, 0, 0, 0))(
-            w, col_intervals[:-1], col_intervals[1:], col_keys)
+    # sample patch positions for columns
+    col_position_encoding = jax.vmap(get_patch_position_encoding, in_axes=(None, None, 0, 0, 0))(
+            w, position_interval, col_intervals[:-1], col_intervals[1:], col_keys)
     col_position_encoding = jnp.squeeze(col_position_encoding)
-    col_position_encoding = jnp.repeat(col_position_encoding, h // patch_size, axis=0)
+    # repeat for each row
+    col_position_encoding = e.repeat(col_position_encoding, 'idx -> repeats idx', repeats=(h+1) // patch_size)
+    col_position_encoding = e.rearrange(col_position_encoding, 'repeats idx -> (repeats idx)')
 
     return row_position_encoding, col_position_encoding
 
@@ -181,10 +187,11 @@ class ImageTokenizer(nn.Module):
     def setup(self):
         self.image_size = self.config["image_size"]
         self.patch_size = self.config["patch_size"]
+        self.position_interval = self.config["position_interval"]
         self.normalize = self.config["normalize"]
         self.embedding_function = ResNetV2Block(config=self.config)
-        self.row_embeddings = nn.Embed(self.config["position_interval"], self.config.embedding_dim)
-        self.col_embeddings = nn.Embed(self.config["position_interval"], self.config.embedding_dim)
+        self.row_embeddings = nn.Embed(self.position_interval, self.config.embedding_dim)
+        self.col_embeddings = nn.Embed(self.position_interval, self.config.embedding_dim)
         self.rng_collection = self.config["rng_collection"]
 
     def __call__(self, image, train=True):
@@ -219,13 +226,15 @@ class ImageTokenizer(nn.Module):
 
         # create patch embeddings
         patch_embeddings = self.embedding_function(patches)
-
-
+        
+        # TODO: add utility to check dimension and finite values with chex
+        
         # create patch position embeddings
         key = self.make_rng(self.rng_collection)
         keys = jax.random.split(key, batch_size*num_images)
-        row_positions, col_positions = jax.vmap(encode_patch_position, in_axes=(0, None, 0, None))(image_flat, self.patch_size, keys, train)
+        row_positions, col_positions = jax.vmap(encode_patch_position, in_axes=(0, None, None, 0, None))(image_flat, self.patch_size, self.position_interval, keys, train)
         
+
         row_position_embeddings = self.row_embeddings(row_positions)
         col_position_embeddings = self.col_embeddings(col_positions)
 
