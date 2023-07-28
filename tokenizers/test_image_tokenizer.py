@@ -68,7 +68,7 @@ class ImageTokenizerTest(parameterized.TestCase):
         chex.assert_shape(row_encoding, (num_patches,))
         chex.assert_tree_all_close(row_encoding[123], jnp.int32(122), atol=70)
 
-
+    # TODO: test the call method
     #def test_call(self):
 
 

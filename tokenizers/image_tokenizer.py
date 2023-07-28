@@ -16,16 +16,15 @@ import flax.linen as nn
 from jax import random
 
 # import custom utils for logging
-from utils.logger import get_logger
+#from utils.logger import get_logger
+#LOG = get_logger(__name__)
 
 ModuleDef = Any
-LOG = get_logger(__name__)
 
 ############################
 # Image Preprocessing
 ############################
 
-# TODO(peterdavidfagan): verify this is row-major format.
 def image_to_patches(image, patch_size, normalize):
     """
     Converts an image into patches, assuming square images.
@@ -59,7 +58,7 @@ def image_to_patches(image, patch_size, normalize):
 
     # normalize pixel values
     if normalize:
-        patches = (2*patches / 255.0) - 1.0
+        patches = (2*(patches/255.0)) - 1.0
         patches = patches / jnp.sqrt(patch_size)
 
     return patches

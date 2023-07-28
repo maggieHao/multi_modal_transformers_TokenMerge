@@ -20,28 +20,21 @@ from transformer_components import Encoder1DBlock
 
 
 def combine_embeddings(
-    action_embeddings, image_embeddings, text_embeddings, obs_pos_embeddings
+    text_embeddings, image_embeddings, action_embeddings, observation_position_embeddings
 ):
     """Combine action, image, and text embeddings into a single embedding vector."""
-    # get dimensions
-    (batch_size, num_images, tokens_per_image, feature_size) = image_embeddings.shape
-    num_actions = action_embeddings.shape[1]
-    total_tokens = (num_images * tokens_per_image) + num_actions
+    # interleave images and actions to create observations
+    action_embeddings = jnp.expand_dims(action_embeddings, axis=2) # add axis for tokens
+    observation_embeddings, ps = e.pack((image_embeddings, action_embeddings), 'batch seq * embed')
+    
+    # add positional embeddings for observations
+    observation_embeddings = observation_embeddings + observation_position_embeddings
+    observation_embeddings = e.rearrange(observation_embeddings, 'batch seq tokens embed -> batch (seq tokens) embed')
 
-    # perform interleaving
-    embeddings = jax.lax.concatenate(
-        (image_embeddings, jnp.expand_dims(action_embeddings, axis=2)), dimension=2
-    )
-    embeddings = jnp.reshape(embeddings, (batch_size, total_tokens, feature_size))
-
-    # add positional embeddings
-    embeddings = embeddings + obs_pos_embeddings
-
-    # concatenate text and interleaved embeddings
-    embeddings = jnp.concatenate((text_embeddings, embeddings), axis=1)
+    # concatenate text and observation embeddings
+    embeddings, ps = e.pack((text_embeddings, observation_embeddings), 'batch * embed')
 
     return embeddings
-
 
 def generate_attention_mask(actions, image_embeddings, text_embeddings, num_heads):
     """Generate multi-head attention mask for padding tokens."""
@@ -101,38 +94,41 @@ class ConceptLearner(nn.Module):
         # image embeddings
         image_tokenizer = ImageTokenizer(config=self.config.image_tokenizer)
         image_embeddings = image_tokenizer(images)
+        batch_size, sequence_length, num_tokens_per_image, _ = image_embeddings.shape
 
         # action embeddings
         action_tokenizer = ActionTokenizer(config=self.config.action_tokenizer)
         action_embeddings = action_tokenizer(actions)
 
         # positional encoding of observation tokens
-        (batch_size, num_images, tokens_per_image, _) = image_embeddings.shape
-        num_actions = action_embeddings.shape[1]
-        total_tokens = (num_images * tokens_per_image) + num_actions
-        tokens_per_obs = tokens_per_image + 1
-
-        obs_encoder = nn.Embed(
-            tokens_per_obs,
+        num_observation_tokens = num_tokens_per_image + 1  # image + action
+        observation_position_tokens = jnp.arange(0, num_observation_tokens)
+        observation_position_tokens = e.repeat(
+                                    observation_position_tokens, 
+                                    'tokens -> batch seq tokens', 
+                                    batch=batch_size, 
+                                    seq=self.config.max_seq_len, # TODO: this shouldn't be hardcoded!!!
+                                    )
+        
+        observation_position_embeddings = nn.Embed(
+            num_observation_tokens,
             self.config.token_embedding_dim,
-        )
-
-        obs_positions = jnp.arange(tokens_per_obs)
-        obs_positions_batch = e.repeat(
-            obs_positions,
-            "observation -> batch (seq observation)",
-            batch=batch_size,
-            seq=total_tokens // tokens_per_obs,
-        )  # one image per observation
-        obs_pos_embeddings = obs_encoder(obs_positions_batch)
-
+        )(observation_position_tokens)
+        
+        # rearrange observation position embeddings
+        #observation_position_embeddings = e.rearrange(
+        #        observation_position_embeddings, 
+        #        '(batch seq token) embed -> batch seq tokens embed')
+        
         # combine embeddings
         x = combine_embeddings(
-            action_embeddings, image_embeddings, text_embeddings, obs_pos_embeddings
+            text_embeddings,
+            image_embeddings, 
+            action_embeddings, 
+            observation_position_embeddings,
         )
 
         # Transformer Self Attention
-
         # generate attention mask for padding tokens
         attention_mask = generate_attention_mask(
             actions,
