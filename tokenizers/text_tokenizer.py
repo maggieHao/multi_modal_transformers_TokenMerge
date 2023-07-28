@@ -18,9 +18,7 @@ import multiprocessing as mp
 from multiprocessing import Pool
 
 
-############################
 # Generate Corpus/Vocab
-############################
 
 def generate_move_puzzle_corpus():
     """Generating move puzzle corpus."""
@@ -46,9 +44,7 @@ def generate_move_puzzle_corpus():
 
         f.write("move \n")
 
-############################
 # Basic Tokenizer
-############################
 
 class BasicTokenizer:
     """
@@ -65,15 +61,13 @@ class BasicTokenizer:
         self.word2idx = {word: idx for idx, word in enumerate(set(vocab))}
         self.vocab_size = len(self.word2idx)
 
-
     def tokenize(self, text):
         """Tokenize text."""
         # convert each token to index
         return np.array([self.word2idx[token] for token in text])
-    
-############################
+
+
 # Sentence Piece Tokenizer 
-############################
 
 def train_sentencepiece_model(input_file, model_prefix, vocab_size):
     """Training sentencepiece model."""
@@ -87,15 +81,12 @@ def train_sentencepiece_model(input_file, model_prefix, vocab_size):
             model_type="unigram",
             )
 
-############################
 # Text Embedding
-############################
 
 class BasicTextTokenizer(nn.Module):
     """
     Text embedding module.
     """
-
     config: dict
 
     def setup(self):
@@ -110,8 +101,6 @@ class BasicTextTokenizer(nn.Module):
                 )
 
     def __call__(self, tokens):
-        
-
         # embed text
         word_embeddings = self.embedding(tokens)
         
