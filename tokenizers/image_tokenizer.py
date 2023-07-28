@@ -216,45 +216,43 @@ class ImageTokenizer(nn.Module):
         batch_size, num_images, h, w, c = image.shape
         num_tokens = (h // self.patch_size) * (w // self.patch_size)
 
-        # flatten batch and sequence dimensions for readability of vmapping
+        # flatten [batch*num_images, h, w, c]
         image_flat = jnp.reshape(image, (-1, *image.shape[-3:]))
         
-        # resize the image to the desired size
+        # exit if image is not the correct size
         if image_flat.shape[-3:] != self.image_size:
-            print("image shape: ", image_flat.shape[-3:])
-            print("image size: ", self.image_size)
             sys.exit("Input image is not the correct size.")
 
         # convert image into patches
         patches = jax.vmap(image_to_patches, in_axes=(0, None, None), out_axes=0)(image_flat, self.patch_size, self.normalize)
         
-        chex.assert_equal(
-                patches.shape[-3:],
-                (
-                    self.patch_size,
-                    self.patch_size, 
-                    c,
+        # create position encodings
+        if train:
+            key = self.make_rng(self.rng_collection)
+            keys = jax.random.split(key, batch_size*num_images)
+            row_position_encoding, col_position_encoding = jax.vmap(encode_patch_position, in_axes=(0, 0, None, None, None), out_axes=0)(
+                image_flat,
+                keys,
+                self.patch_size, 
+                self.position_interval,
+                train
                 )
+        else:
+            keys = None
+            row_position_encoding, col_position_encoding = jax.vmap(encode_patch_position, in_axes=(0, None, None, None, None), out_axes=0)(
+                image_flat,
+                keys,
+                self.patch_size, 
+                self.position_interval,
+                train
                 )
 
+        # create position embeddings 
+        row_position_embeddings = self.row_embeddings(row_position_encoding)
+        col_position_embeddings = self.col_embeddings(col_position_encoding)
+        
         # create patch embeddings
         patch_embeddings = self.embedding_function(patches)
-        
-        # TODO: add utility to check dimension and finite values with chex
-        
-        # create patch position embeddings
-        key = self.make_rng(self.rng_collection)
-        keys = jax.random.split(key, batch_size*num_images)
-        row_positions, col_positions = jax.vmap(encode_patch_position, in_axes=(0, None, None, 0, None))(image_flat, self.patch_size, self.position_interval, keys, train)
-        
-
-        row_position_embeddings = self.row_embeddings(row_positions)
-        col_position_embeddings = self.col_embeddings(col_positions)
-
-        chex.assert_equal(
-                row_position_embeddings.shape,
-                patch_embeddings.shape
-                )
         
         # add position embeddings to patch embeddings (broadcasting)
         patch_embeddings = patch_embeddings + row_position_embeddings + col_position_embeddings
