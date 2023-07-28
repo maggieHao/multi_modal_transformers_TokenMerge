@@ -65,52 +65,65 @@ def image_to_patches(image, patch_size, normalize):
     return patches
 
 
-def encode_patch_position(image, patch_size, position_interval, key, train=True):
+def encode_patch_position(image, key, patch_size, num_tokens, train=True):
     """
-    Calculates the patch interval for an image.
+    Calculates the patch position tokens for patches in a square image.
+
+    For a given patch in an image we wish to generate a position index.
+    To accomplish this we normalize and quantise the pixel indices 
+    corresponding to the patch. During training we randomly sample from the
+    quantised range while during evaluation we take the mean. 
     """
+    # get image dimensions
     h, w, c = image.shape
-    
-    def get_patch_position_encoding(interval_length, position_interval, start_idx, stop_idx, key):
-        # normalize patch interval
-        start_idx = start_idx / interval_length
-        stop_idx = stop_idx / interval_length
+    patches_per_dim = h // patch_size
+    num_patches = patches_per_dim**2
 
-        # quantize patch interval
-        start_idx = jnp.floor(start_idx * position_interval)
-        stop_idx = jnp.floor(stop_idx * position_interval)
+    # get indices of patch intervals
+    idx_vals = jnp.arange(0, h+patch_size, patch_size)
+    idx_pairs, packed_shape = e.pack((idx_vals[:-1], idx_vals[1:]), 'idx *')
+    row_idx = e.repeat(idx_pairs, 'row_idx row_interval -> (repeat row_idx) row_interval', repeat = patches_per_dim) # [patch_idx, row_interval]
+    col_idx = e.repeat(idx_pairs, 'col_idx col_interval -> (col_idx repeat) col_interval', repeat = patches_per_dim) # [patch_idx, col_interval]
+    patch_idx, ps = e.pack((row_idx, col_idx), 'patch_idx *') # [patch_idx, row_interval col_interval]
 
-        if train:
-            # sample uniformly from the patch interval
-            return random.randint(key, shape=(1,), minval=start_idx, maxval=stop_idx)
-        else:
-            # use the center of the patch interval
-            return (start_idx + stop_idx) // 2
+    def get_patch_position_encoding(idx, key, interval_length, num_tokens):
+      """
+      Generate position token for a given patch and dimension (row/col)
+      """
+      # normalize and quatise
+      idx = jnp.floor((idx / interval_length) * (num_tokens-1))
+      row_start_idx, row_stop_idx, col_start_idx, col_stop_idx = idx
+      
+      if train:
+        # split the key
+        key_1, key_2 = jax.random.split(key)
+        # sample uniformly from the patch interval
+        row_token = random.randint(key_1, shape=(1,), minval=row_start_idx, maxval=row_stop_idx)
+        col_token = random.randint(key_2, shape=(1,), minval=col_start_idx, maxval=col_stop_idx)
+      else:
+        # use the center of the patch interval
+        row_token = jnp.int32((row_start_idx + row_stop_idx) // 2)
+        col_token = jnp.int32((col_start_idx + col_stop_idx) // 2)
+        
+      return row_token, col_token
+      
+    # generate tokens for patches in image
+    if train:
+      # generate random keys
+      keys = random.split(key, num_patches) # key per patch
 
-    # get patch intervals ranges for rows and columns
-    row_intervals = jnp.arange(0, h+1, patch_size)
-    row_keys = random.split(key, (h+1) // patch_size)
-    col_intervals = jnp.arange(0, w+1, patch_size)
-    col_keys = random.split(key, (w+1) // patch_size)
-    
-    # sample patch positions for rows
-    row_position_encoding = jax.vmap(get_patch_position_encoding, in_axes=(None, None, 0, 0, 0))(
-            h, position_interval, row_intervals[:-1], row_intervals[1:], row_keys)
-    row_position_encoding = jnp.squeeze(row_position_encoding)
-    # repeat for each column
-    row_position_encoding = e.repeat(row_position_encoding, 'idx -> repeats idx', repeats=(w+1) // patch_size)
-    row_position_encoding = e.rearrange(row_position_encoding, 'repeats idx -> (repeats idx)')
+      # generate encodings (with sampling)
+      row_tokens, col_tokens = jax.vmap(
+          get_patch_position_encoding, 
+          in_axes=(0, 0, None, None))(patch_idx, keys, h, num_tokens)
 
-    # sample patch positions for columns
-    col_position_encoding = jax.vmap(get_patch_position_encoding, in_axes=(None, None, 0, 0, 0))(
-            w, position_interval, col_intervals[:-1], col_intervals[1:], col_keys)
-    col_position_encoding = jnp.squeeze(col_position_encoding)
-    # repeat for each row
-    col_position_encoding = e.repeat(col_position_encoding, 'idx -> repeats idx', repeats=(h+1) // patch_size)
-    col_position_encoding = e.rearrange(col_position_encoding, 'repeats idx -> (repeats idx)')
+    else:
+      # generate encodings (with sampling)
+      row_tokens, col_tokens = jax.vmap(
+          get_patch_position_encoding, 
+          in_axes=(0, None, None, None))(patch_idx, None, h, num_tokens)
 
-    return row_position_encoding, col_position_encoding
-
+    return jnp.squeeze(row_tokens), jnp.squeeze(col_tokens)
 
 
 ############################
