@@ -79,5 +79,9 @@ class Encoder1DBlock(nn.Module):
         # MLP block.
         y = nn.LayerNorm()(x)
         y = MLPBlock(config=config)(y)
+        
+        # check if residual connection needs resizing
+        if x.shape[-1] != y.shape[-1]:
+            x = nn.Dense(y.shape[-1])(x)
 
         return x + y

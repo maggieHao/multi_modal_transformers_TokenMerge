@@ -82,6 +82,9 @@ class ConceptLearner(nn.Module):
     def __call__(self, text, images, actions, train=True):
         """Forward pass through the model."""
         # Tokenization + Generate Input Embeddings
+        
+        # get action indices
+        target_action_idx = jnp.argmax(actions == 0, axis=-1)
 
         # text embeddings
         text_tokenizer = BasicTextTokenizer(config=self.config.text_tokenizer)
@@ -129,7 +132,7 @@ class ConceptLearner(nn.Module):
         )
 
         # pass through self attention layer
-        config_= self.config.self_attention
+        config_= self.config.self_attention.copy()
         config_.out_dim = None
         for i in range(self.config.self_attention.num_blocks):
             if i != self.config.self_attention.num_blocks - 1:
@@ -143,10 +146,7 @@ class ConceptLearner(nn.Module):
                     mask=attention_mask,
                 )
 
-        # calculate logits with linear layer
-        x = e.rearrange(x, "batch tokens features -> batch (tokens features)")
-        x = nn.Dense(
-            self.config.linear_out.output_dim,
-        )(x)
+        # get action logits at appropriate timestep
+        action_logits = x[:, target_action_idx, :]
 
-        return x
+        return action_logits
