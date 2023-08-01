@@ -44,21 +44,17 @@ def generate_attention_mask(actions, image_embeddings, text_embeddings, num_head
     (_, text_tokens, _) = text_embeddings.shape
 
     # create binary mask for padding tokens in image + action sequence
-    attention_mask_input = e.rearrange(
-        e.repeat(
+    observation_mask = e.repeat(
             jnp.where(actions == 0, 0, 1),
-            "batch seq -> batch seq repeats",
-            repeats=tokens_per_image + 1,
-        ),  # patches per image + action
-        "batch seq repeats -> batch (seq repeats)",
-    )
+            "batch seq -> batch (seq repeats)",
+            repeats=tokens_per_image + 1, # image tokens + one action token
+        )
 
     # create binary mask for text tokens
     text_mask = jnp.ones((batch_size, text_tokens))
-    attention_mask_input = jnp.concatenate(
-        (text_mask, attention_mask_input),
-        axis=1,
-    )
+
+    # pack text and observation mask
+    attention_mask_input, ps = e.pack((text_mask, observation_mask), 'batch *')
 
     # generate 1D attention mask
     attention_mask = nn.make_attention_mask(
@@ -83,7 +79,7 @@ class ConceptLearner(nn.Module):
 
     # TODO: move parameters to single batch parameter
     @nn.compact
-    def __call__(self, text, images, actions):
+    def __call__(self, text, images, actions, train=True):
         """Forward pass through the model."""
         # Tokenization + Generate Input Embeddings
 
@@ -93,7 +89,7 @@ class ConceptLearner(nn.Module):
 
         # image embeddings
         image_tokenizer = ImageTokenizer(config=self.config.image_tokenizer)
-        image_embeddings = image_tokenizer(images)
+        image_embeddings = image_tokenizer(images, train=train)
         batch_size, sequence_length, num_tokens_per_image, _ = image_embeddings.shape
 
         # action embeddings
@@ -107,18 +103,13 @@ class ConceptLearner(nn.Module):
                                     observation_position_tokens, 
                                     'tokens -> batch seq tokens', 
                                     batch=batch_size, 
-                                    seq=self.config.max_seq_len, # TODO: this shouldn't be hardcoded!!!
+                                    seq=self.config.max_seq_len,
                                     )
         
         observation_position_embeddings = nn.Embed(
             num_observation_tokens,
             self.config.token_embedding_dim,
         )(observation_position_tokens)
-        
-        # rearrange observation position embeddings
-        #observation_position_embeddings = e.rearrange(
-        #        observation_position_embeddings, 
-        #        '(batch seq token) embed -> batch seq tokens embed')
         
         # combine embeddings
         x = combine_embeddings(
@@ -136,12 +127,21 @@ class ConceptLearner(nn.Module):
             text_embeddings,
             self.config.self_attention.num_heads,
         )
+
         # pass through self attention layer
-        for _ in range(self.config.self_attention.num_blocks):
-            x = Encoder1DBlock(self.config.self_attention)(
-                x,
-                mask=attention_mask,
-            )
+        config_= self.config.self_attention
+        config_.out_dim = None
+        for i in range(self.config.self_attention.num_blocks):
+            if i != self.config.self_attention.num_blocks - 1:
+                x = Encoder1DBlock(config_)(
+                    x,
+                    mask=attention_mask,
+                )
+            else:
+                x = Encoder1DBlock(self.config.self_attention)(
+                    x,
+                    mask=attention_mask,
+                )
 
         # calculate logits with linear layer
         x = e.rearrange(x, "batch tokens features -> batch (tokens features)")

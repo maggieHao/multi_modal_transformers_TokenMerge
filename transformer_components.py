@@ -19,6 +19,7 @@ class MLPBlock(nn.Module):
     @nn.compact
     def __call__(self, inputs):
         """Apply MLPBlock module."""
+        actual_out_dim = inputs.shape[-1] if self.config["out_dim"] is None else self.config["out_dim"]
         x = nn.Dense(
             features=self.config["hidden_size"],
             use_bias=self.config["use_bias"],
@@ -31,7 +32,7 @@ class MLPBlock(nn.Module):
         )(x, deterministic=False)
 
         x = nn.Dense(
-            features=self.config["hidden_size"],
+            features=actual_out_dim,
             use_bias=self.config["use_bias"],
             kernel_init=nn.initializers.normal(),
             bias_init=nn.initializers.constant(0.0),

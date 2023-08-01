@@ -145,8 +145,11 @@ class ResNetV2Block(nn.Module):
                 strides=self.config.token_embedding.input_projection.strides,
                 padding=self.config.token_embedding.input_projection.padding,
                 )(x)
-        x = nn.GroupNorm()(x)
-        x = nn.gelu(x)
+        #x = nn.max_pool(
+        #        x, 
+        #        window_shape=self.config.token_embedding.input_projection.pool.window_shape, 
+        #        strides=self.config.token_embedding.input_projection.pool.strides,
+        #        )
 
         # resnetv2block
         residual = x
@@ -170,10 +173,6 @@ class ResNetV2Block(nn.Module):
                 )(y)
   
         out = y+residual
-        
-        # map to embedding dimension
-        out = nn.GroupNorm()(out)
-        out = nn.gelu(out)
         
         #flatten output
         out = jnp.reshape(out, (*out.shape[:2], -1))
@@ -220,6 +219,8 @@ class ImageTokenizer(nn.Module):
         
         # exit if image is not the correct size
         if image_flat.shape[-3:] != self.image_size:
+            print(image_flat.shape[-3:])
+            print(self.image_size)
             sys.exit("Input image is not the correct size.")
 
         # convert image into patches
