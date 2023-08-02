@@ -5,6 +5,6 @@ text_tokenizer.py -> implementation of text tokenizer
 ```
 
 ## Image Tokenizer
-<img src="../assets/image_tokenizer.png" width="400" height="400">
+<img src="../../assets/image_tokenizer.png" width="400" height="400">
 
 
