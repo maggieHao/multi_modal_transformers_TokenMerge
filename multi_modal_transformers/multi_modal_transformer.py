@@ -11,12 +11,12 @@ import flax.linen as nn
 import einops as e
 
 # custom tokenizers
-from tokenizers.value_tokenizer import ActionTokenizer
-from tokenizers.image_tokenizer import ImageTokenizer
-from tokenizers.text_tokenizer import BasicTextTokenizer
+from multi_modal_transformers.tokenizers.value_tokenizer import ActionTokenizer
+from multi_modal_transformers.tokenizers.image_tokenizer import ImageTokenizer
+from multi_modal_transformers.tokenizers.text_tokenizer import BasicTextTokenizer
 
 # transformer modules
-from transformer_components import Encoder1DBlock
+from multi_modal_transformers.transformer_components import Encoder1DBlock
 
 
 def combine_embeddings(
@@ -71,6 +71,21 @@ def generate_attention_mask(actions, image_embeddings, text_embeddings, num_head
 
     return multi_head_attention_mask
 
+def slice_action_sequence(actions, embeddings, num_text_tokens, num_obs_tokens):
+    """Retrieve action embeddings from sequence."""
+
+    # TODO: provide this index in dataset
+    # the first zero value in the action sequence is the target action index
+    target_action_idx = jnp.argmax(actions == 0, axis=-1)
+    target_action_idx = ((target_action_idx+1)*num_obs_tokens) + num_text_tokens
+    target_action_idx = target_action_idx - 1 # correct for zero indexing
+
+    # slice action embeddings
+    action_logits = embeddings[jnp.arange(embeddings.shape[0]), target_action_idx, :]
+
+    return action_logits
+    
+
 
 class ConceptLearner(nn.Module):
     """A multi-modal decoder-only Transformer architecture."""
@@ -83,9 +98,6 @@ class ConceptLearner(nn.Module):
         """Forward pass through the model."""
         # Tokenization + Generate Input Embeddings
         
-        # get action indices
-        target_action_idx = jnp.argmax(actions == 0, axis=-1)
-
         # text embeddings
         text_tokenizer = BasicTextTokenizer(config=self.config.text_tokenizer)
         text_embeddings = text_tokenizer(text)
@@ -100,19 +112,11 @@ class ConceptLearner(nn.Module):
         action_embeddings = action_tokenizer(actions)
 
         # positional encoding of observation tokens
-        num_observation_tokens = num_tokens_per_image + 1  # image + action
-        observation_position_tokens = jnp.arange(0, num_observation_tokens)
-        observation_position_tokens = e.repeat(
-                                    observation_position_tokens, 
-                                    'tokens -> batch seq tokens', 
-                                    batch=batch_size, 
-                                    seq=self.config.max_seq_len,
-                                    )
-        
-        observation_position_embeddings = nn.Embed(
-            num_observation_tokens,
-            self.config.token_embedding_dim,
-        )(observation_position_tokens)
+        observation_position_embeddings = self.param(
+            "observation_embeddings",
+            nn.initializers.normal(stddev=0.02),
+            (num_tokens_per_image + 1, self.config.token_embedding_dim),
+                )
         
         # combine embeddings
         x = combine_embeddings(
@@ -147,6 +151,6 @@ class ConceptLearner(nn.Module):
                 )
 
         # get action logits at appropriate timestep
-        action_logits = x[:, target_action_idx, :]
+        action_logits = slice_action_sequence(actions, x, text_embeddings.shape[1], num_tokens_per_image +1)
 
         return action_logits

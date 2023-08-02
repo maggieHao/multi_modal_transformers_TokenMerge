@@ -12,6 +12,7 @@ import jax.numpy as jnp
 import flax.linen as nn
 from jax import random
 import numpy as np
+import einops as e
 
 # multi-processing
 import multiprocessing as mp
@@ -94,11 +95,18 @@ class BasicTextTokenizer(nn.Module):
                 num_embeddings=self.config["vocab_size"],
                 features=self.config["embedding_dim"],
                 )
-
-        self.position_embedding = nn.Embed(
-                num_embeddings=self.config["max_text_len"],
-                features=self.config["embedding_dim"],
+        
+        self.position_embedding = self.param(
+                'text_pos_embedding', 
+                nn.initializers.normal(stddev=0.02), 
+                (self.config["max_text_len"],
+                self.config["embedding_dim"])
                 )
+
+        #self.position_embedding = nn.Embed(
+        #        num_embeddings=self.config["max_text_len"],
+        #        features=self.config["embedding_dim"],
+        #        )
 
     def __call__(self, tokens):
         # embed text
@@ -106,9 +114,9 @@ class BasicTextTokenizer(nn.Module):
         
         # add position embedding
         positions = jnp.arange(tokens.shape[1])
-        position_embeddings = self.position_embedding(positions)
+        positions = e.repeat(positions, "pos -> batch pos", batch=tokens.shape[0])
 
-        return word_embeddings + position_embeddings
+        return word_embeddings + self.position_embedding
 
 
 if __name__=="__main__":

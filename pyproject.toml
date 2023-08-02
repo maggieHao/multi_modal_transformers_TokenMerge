@@ -1,0 +1,51 @@
+[project]
+name = "multi_modal_transformers"
+version = "0.0.0"
+description = "A transformer library."
+authors = [
+	{ name = "Peter David Fagan", email = "peterdavidfagan@gmail.com" }
+]
+readme = "README.md"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["multi_modal_transformers"]
+
+[tool.poetry]
+name = "multi_modal_transformers"
+version = "0.0.0"
+description = "A transformer library."
+license = "Apache-2.0"
+authors = [
+	"Peter David Fagan <peterdavidfagan@gmail.com>"
+]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "3.10.6"
+jaxlib = {extras=["cuda12_pip"], url = "https://storage.googleapis.com/jax-releases/cuda12/jaxlib-0.4.13+cuda12.cudnn89-cp310-cp310-manylinux2014_x86_64.whl"}
+absl-py = "1.4.0"
+fire = "0.4.0"
+matplotlib = "3.5.0"
+numpy = "1.*"
+pyyaml = "6.0"
+pre-commit = "3.0.2"
+optax = "0.1.7"
+einops = "0.6.0"
+flax = "0.6.10"
+tensorflow-cpu = "2.13.0"
+tensorflow-datasets = "4.9.2"
+protobuf = "4.23.*"
+orbax-checkpoint = "^0.3.0"
+orbax-export = "^0.0.2"
+
+
+[tool.black]
+line-length = 120
+
+[tool.flake8]
+max-line-length = 120
+

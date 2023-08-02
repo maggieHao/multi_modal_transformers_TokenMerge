@@ -145,40 +145,48 @@ class ResNetV2Block(nn.Module):
                 strides=self.config.token_embedding.input_projection.strides,
                 padding=self.config.token_embedding.input_projection.padding,
                 )(x)
-        #x = nn.max_pool(
-        #        x, 
-        #        window_shape=self.config.token_embedding.input_projection.pool.window_shape, 
-        #        strides=self.config.token_embedding.input_projection.pool.strides,
-        #        )
+        x = nn.max_pool(
+                x, 
+                window_shape=self.config.token_embedding.input_projection.pool.window_shape, 
+                strides=self.config.token_embedding.input_projection.pool.strides,
+                )
 
         # resnetv2block
         residual = x
 
-        y = nn.GroupNorm()(x)
-        y = nn.gelu(y)
-        y = nn.Conv(
+        x = nn.GroupNorm()(x)
+        x = nn.gelu(x)
+        x = nn.Conv(
                 features=self.config.token_embedding.resnet_block.features,
                 kernel_size=self.config.token_embedding.resnet_block.kernel_size,
                 strides=self.config.token_embedding.resnet_block.strides,
                 padding=self.config.token_embedding.resnet_block.padding,
-                )(y)
+                )(x)
         
-        y = nn.GroupNorm()(y)
-        y = nn.gelu(y)
-        y = nn.Conv(
+        x = nn.GroupNorm()(x)
+        x = nn.gelu(x)
+        x = nn.Conv(
                 features=self.config.token_embedding.resnet_block.features,
                 kernel_size=self.config.token_embedding.resnet_block.kernel_size,
                 strides=self.config.token_embedding.resnet_block.strides,
                 padding=self.config.token_embedding.resnet_block.padding,
-                )(y)
+                )(x)
+
+        if residual.shape != x.shape:
+            residual = nn.Conv(
+                    features=self.config.token_embedding.resnet_block.features,
+                    kernel_size=self.config.token_embedding.resnet_block.kernel_size,
+                    strides=self.config.token_embedding.resnet_block.strides,
+                    padding=self.config.token_embedding.resnet_block.padding,
+            )(residual)
   
-        out = y+residual
+        x = x+residual
         
         #flatten output
-        out = jnp.reshape(out, (*out.shape[:2], -1))
-        out = nn.Dense(features=self.config.embedding_dim)(out)
-        
-        return out
+        x = jnp.reshape(x, (*x.shape[:3], -1))
+        x = nn.Dense(features=self.config.embedding_dim)(x) 
+
+        return x
 
 ### RobotCat VQ-GAN (Incomplete) ###
 
@@ -215,32 +223,56 @@ class ImageTokenizer(nn.Module):
         num_tokens = (h // self.patch_size) * (w // self.patch_size)
 
         # flatten [batch*num_images, h, w, c]
-        image_flat = jnp.reshape(image, (-1, *image.shape[-3:]))
+        #image_flat = jnp.reshape(image, (-1, *image.shape[-3:]))
         
         # exit if image is not the correct size
-        if image_flat.shape[-3:] != self.image_size:
-            print(image_flat.shape[-3:])
+        if image.shape[-3:] != self.image_size:
+            print(image.shape[-3:])
             print(self.image_size)
             sys.exit("Input image is not the correct size.")
 
         # convert image into patches
-        patches = jax.vmap(image_to_patches, in_axes=(0, None, None), out_axes=0)(image_flat, self.patch_size, self.normalize)
-        
+        patches = jax.vmap(
+                jax.vmap(
+                    image_to_patches, 
+                    in_axes=(0, None, None), 
+                    out_axes=0
+                    ), 
+                in_axes=(0, None, None), 
+                out_axes=0)(
+                        image, 
+                        self.patch_size, 
+                        self.normalize
+                        )
+
         # create position encodings
         if train:
             key = self.make_rng(self.rng_collection)
-            keys = jax.random.split(key, batch_size*num_images)
-            row_position_encoding, col_position_encoding = jax.vmap(encode_patch_position, in_axes=(0, 0, None, None, None), out_axes=0)(
-                image_flat,
-                keys,
-                self.patch_size, 
-                self.position_interval,
-                train
-                )
+            keys = jax.random.split(key, (batch_size,num_images))
+            row_position_encoding, col_position_encoding = jax.vmap(
+                    jax.vmap(
+                        encode_patch_position, 
+                        in_axes=(0, 0, None, None, None), 
+                        out_axes=0),
+                    in_axes=(0, 0, None, None, None),
+                    out_axes=0)(
+                            image,
+                            keys,
+                            self.patch_size, 
+                            self.position_interval,
+                            train
+                            )
         else:
             keys = None
-            row_position_encoding, col_position_encoding = jax.vmap(encode_patch_position, in_axes=(0, None, None, None, None), out_axes=0)(
-                image_flat,
+            row_position_encoding, col_position_encoding = jax.vmap(
+                    jax.vmap(
+                        encode_patch_position, 
+                        in_axes=(0, None, None, None, None), 
+                        out_axes=0),
+                    in_axes=(0, None, None, None, None),
+                    out_axes=0,
+                    )(
+                image,
                 keys,
                 self.patch_size, 
                 self.position_interval,
@@ -250,15 +282,15 @@ class ImageTokenizer(nn.Module):
         # create position embeddings 
         row_position_embeddings = self.row_embeddings(row_position_encoding)
         col_position_embeddings = self.col_embeddings(col_position_encoding)
-        
+
         # create patch embeddings
         patch_embeddings = self.embedding_function(patches)
-        
+
         # add position embeddings to patch embeddings (broadcasting)
         patch_embeddings = patch_embeddings + row_position_embeddings + col_position_embeddings
 
         # reshape back to original shape
-        patch_embeddings = jnp.reshape(patch_embeddings, (batch_size, num_images, num_tokens,-1))
-
+        #patch_embeddings = jnp.reshape(patch_embeddings, (batch_size, num_images, num_tokens,-1))
+        
         return patch_embeddings
 
