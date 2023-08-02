@@ -23,8 +23,8 @@ class MLPBlock(nn.Module):
         x = nn.Dense(
             features=self.config["hidden_size"],
             use_bias=self.config["use_bias"],
-            kernel_init=nn.initializers.normal(),
-            bias_init=nn.initializers.constant(0.0),
+            kernel_init=nn.initializers.he_normal(),
+            #bias_init=nn.initializers.he_normal(),
         )(inputs)
         x = nn.relu(x)
         x = nn.Dropout(
@@ -34,8 +34,8 @@ class MLPBlock(nn.Module):
         x = nn.Dense(
             features=actual_out_dim,
             use_bias=self.config["use_bias"],
-            kernel_init=nn.initializers.normal(),
-            bias_init=nn.initializers.constant(0.0),
+            kernel_init=nn.initializers.he_normal(),
+            #bias_init=nn.initializers.he_normal(),
         )(x)
 
         outputs = nn.Dropout(
@@ -69,7 +69,12 @@ class Encoder1DBlock(nn.Module):
 
         # Attention block.
         x = nn.LayerNorm()(inputs)
-        x = nn.SelfAttention(num_heads=config.num_heads, qkv_features=config.qkv_dim)(
+        x = nn.SelfAttention(
+                num_heads=config.num_heads, 
+                qkv_features=config.qkv_dim,
+                kernel_init=nn.initializers.he_normal(),
+                #bias_init=nn.initializers.he_normal()
+                )(
             x, mask
         )
 

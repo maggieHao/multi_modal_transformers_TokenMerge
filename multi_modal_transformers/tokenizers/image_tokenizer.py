@@ -144,6 +144,7 @@ class ResNetV2Block(nn.Module):
                 kernel_size=self.config.token_embedding.input_projection.kernel_size,
                 strides=self.config.token_embedding.input_projection.strides,
                 padding=self.config.token_embedding.input_projection.padding,
+                kernel_init=nn.initializers.xavier_normal(),
                 )(x)
         x = nn.max_pool(
                 x, 
@@ -161,6 +162,7 @@ class ResNetV2Block(nn.Module):
                 kernel_size=self.config.token_embedding.resnet_block.kernel_size,
                 strides=self.config.token_embedding.resnet_block.strides,
                 padding=self.config.token_embedding.resnet_block.padding,
+                kernel_init=nn.initializers.xavier_normal(),
                 )(x)
         
         x = nn.GroupNorm()(x)
@@ -170,6 +172,7 @@ class ResNetV2Block(nn.Module):
                 kernel_size=self.config.token_embedding.resnet_block.kernel_size,
                 strides=self.config.token_embedding.resnet_block.strides,
                 padding=self.config.token_embedding.resnet_block.padding,
+                kernel_init=nn.initializers.xavier_normal(),
                 )(x)
 
         if residual.shape != x.shape:
@@ -178,13 +181,17 @@ class ResNetV2Block(nn.Module):
                     kernel_size=self.config.token_embedding.resnet_block.kernel_size,
                     strides=self.config.token_embedding.resnet_block.strides,
                     padding=self.config.token_embedding.resnet_block.padding,
+                    kernel_init=nn.initializers.xavier_normal(),
             )(residual)
   
         x = x+residual
         
         #flatten output
         x = jnp.reshape(x, (*x.shape[:3], -1))
-        x = nn.Dense(features=self.config.embedding_dim)(x) 
+        x = nn.Dense(
+                features=self.config.embedding_dim,
+                kernel_init=nn.initializers.xavier_normal(),
+                )(x) 
 
         return x
 
