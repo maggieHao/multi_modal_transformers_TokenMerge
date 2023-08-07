@@ -10,6 +10,7 @@ import chex
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+from flax.linen import initializers
 from jax import random
 import numpy as np
 import einops as e
@@ -91,22 +92,40 @@ class BasicTextTokenizer(nn.Module):
     config: dict
 
     def setup(self):
-        self.embedding = nn.Embed(
-                num_embeddings=self.config["vocab_size"],
-                features=self.config["embedding_dim"],
-                )
         
-        self.position_embedding = self.param(
-                'text_pos_embedding', 
-                nn.initializers.normal(stddev=0.02), 
-                (self.config["max_text_len"],
-                self.config["embedding_dim"])
-                )
-
-        #self.position_embedding = nn.Embed(
-        #        num_embeddings=self.config["max_text_len"],
-        #        features=self.config["embedding_dim"],
-        #        )
+        if self.config.train_parallel:
+            self.embedding = nn.Embed(
+                    num_embeddings=self.config["vocab_size"],
+                    features=self.config["embedding_dim"],
+                    embedding_init=nn.with_partitioning(
+                    initializers.variance_scaling(
+                        1.0, 'fan_in', 'normal', out_axis=0
+                        ), 
+                    (None, 'model')),
+                    )
+            
+            self.position_embedding = self.param(
+                    'text_pos_embedding', 
+                    nn.with_partitioning(
+                        nn.initializers.normal(stddev=0.02),
+                        (None, 'model')
+                        ),
+                    (self.config["max_text_len"],
+                    self.config["embedding_dim"])
+                    )
+        
+        else:
+            self.embedding = nn.Embed(
+                    num_embeddings=self.config["vocab_size"],
+                    features=self.config["embedding_dim"],
+                    )
+            
+            self.position_embedding = self.param(
+                    'text_pos_embedding', 
+                    nn.initializers.normal(stddev=0.02), 
+                    (self.config["max_text_len"],
+                    self.config["embedding_dim"])
+                    )
 
     def __call__(self, tokens):
         # embed text

@@ -6,6 +6,7 @@ import chex
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+from flax.linen import initializers
 from jax import random
 
 ############################
@@ -20,10 +21,21 @@ class ActionTokenizer(nn.Module):
     config: dict
 
     def setup(self):
-        self.embedding = nn.Embed(
-            num_embeddings=self.config["num_actions"],
-            features=self.config["embedding_dim"],
-        )
+        if self.config.train_parallel:
+            self.embedding = nn.Embed(
+                num_embeddings=self.config["num_actions"],
+                features=self.config["embedding_dim"],
+                embedding_init=nn.with_partitioning(
+                    initializers.variance_scaling(
+                        1.0, 'fan_in', 'normal', out_axis=0
+                        ), 
+                    (None, 'model'))
+            )
+        else:
+            self.embedding = nn.Embed(
+                num_embeddings=self.config["num_actions"],
+                features=self.config["embedding_dim"],
+            )
 
     def __call__(self, action):
         return self.embedding(action)

@@ -8,6 +8,7 @@ Heavily inspired by: https://github.com/google/flax/blob/main/examples/wmt/model
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+from flax.linen import initializers
 import einops as e
 
 # custom tokenizers
@@ -112,11 +113,21 @@ class ConceptLearner(nn.Module):
         action_embeddings = action_tokenizer(actions)
 
         # positional encoding of observation tokens
-        observation_position_embeddings = self.param(
-            "observation_embeddings",
-            nn.initializers.normal(stddev=0.02),
-            (num_tokens_per_image + 1, self.config.token_embedding_dim),
-                )
+        if self.config.train_parallel:
+            observation_position_embeddings = self.param(
+                "observation_embeddings",
+                nn.with_partitioning(
+                    nn.initializers.normal(stddev=0.02),
+                    (None, 'model')
+                    )
+                (num_tokens_per_image + 1, self.config.token_embedding_dim),
+                    )
+        else:
+            observation_position_embeddings = self.param(
+                "observation_embeddings",
+                nn.initializers.normal(stddev=0.02),
+                (num_tokens_per_image + 1, self.config.token_embedding_dim),
+                    )
         
         # combine embeddings
         x = combine_embeddings(
@@ -138,6 +149,7 @@ class ConceptLearner(nn.Module):
         # pass through self attention layer
         config_= self.config.self_attention.copy()
         config_.out_dim = None
+        # TODO: replace for loop with flax.linen.scan
         for i in range(self.config.self_attention.num_blocks):
             if i != self.config.self_attention.num_blocks - 1:
                 x = Encoder1DBlock(config_)(

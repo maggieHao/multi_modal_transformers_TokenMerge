@@ -13,6 +13,7 @@ import chex
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+from flax.linen import initializers
 from jax import random
 
 # import custom utils for logging
@@ -138,60 +139,146 @@ class ResNetV2Block(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        # start with convolution projection
-        x = nn.Conv(
-                features=self.config.token_embedding.input_projection.features,
-                kernel_size=self.config.token_embedding.input_projection.kernel_size,
-                strides=self.config.token_embedding.input_projection.strides,
-                padding=self.config.token_embedding.input_projection.padding,
-                kernel_init=nn.initializers.xavier_normal(),
-                )(x)
-        x = nn.max_pool(
-                x, 
-                window_shape=self.config.token_embedding.input_projection.pool.window_shape, 
-                strides=self.config.token_embedding.input_projection.pool.strides,
-                )
+        if config.train_parallel:
+            # start with convolution projection
+            x = nn.Conv(
+                    features=self.config.token_embedding.input_projection.features,
+                    kernel_size=self.config.token_embedding.input_projection.kernel_size,
+                    strides=self.config.token_embedding.input_projection.strides,
+                    padding=self.config.token_embedding.input_projection.padding,
+                    kernel_init=nn.initializers.xavier_normal(),
+                    )(x)
+            x = nn.max_pool(
+                    x, 
+                    window_shape=self.config.token_embedding.input_projection.pool.window_shape, 
+                    strides=self.config.token_embedding.input_projection.pool.strides,
+                    )
 
-        # resnetv2block
-        residual = x
+            # resnetv2block
+            residual = x
 
-        x = nn.GroupNorm()(x)
-        x = nn.gelu(x)
-        x = nn.Conv(
-                features=self.config.token_embedding.resnet_block.features,
-                kernel_size=self.config.token_embedding.resnet_block.kernel_size,
-                strides=self.config.token_embedding.resnet_block.strides,
-                padding=self.config.token_embedding.resnet_block.padding,
-                kernel_init=nn.initializers.xavier_normal(),
-                )(x)
-        
-        x = nn.GroupNorm()(x)
-        x = nn.gelu(x)
-        x = nn.Conv(
-                features=self.config.token_embedding.resnet_block.features,
-                kernel_size=self.config.token_embedding.resnet_block.kernel_size,
-                strides=self.config.token_embedding.resnet_block.strides,
-                padding=self.config.token_embedding.resnet_block.padding,
-                kernel_init=nn.initializers.xavier_normal(),
-                )(x)
+            x = nn.GroupNorm()(x)
+            x = nn.gelu(x)
+            x = nn.Conv(
+                    features=self.config.token_embedding.resnet_block.features,
+                    kernel_size=self.config.token_embedding.resnet_block.kernel_size,
+                    strides=self.config.token_embedding.resnet_block.strides,
+                    padding=self.config.token_embedding.resnet_block.padding,
+                    kernel_init=nn.with_partitioning(
+                        initializers.he_normal(),
+                        (None, 'model')
+                        ),
+                    bias_init=nn.with_partitioning(
+                        initializers.he_normal(),
+                        (None, 'model'),
+                        )
+                    )(x)
+            
+            x = nn.GroupNorm()(x)
+            x = nn.gelu(x)
+            x = nn.Conv(
+                    features=self.config.token_embedding.resnet_block.features,
+                    kernel_size=self.config.token_embedding.resnet_block.kernel_size,
+                    strides=self.config.token_embedding.resnet_block.strides,
+                    padding=self.config.token_embedding.resnet_block.padding,
+                    kernel_init=nn.with_partitioning(
+                        initializers.he_normal(),
+                        (None, 'model')
+                        ),
+                    bias_init=nn.with_partitioning(
+                        initializers.he_normal(),
+                        (None, 'model'),
+                        )
+                    )(x)
 
-        if residual.shape != x.shape:
-            residual = nn.Conv(
+            if residual.shape != x.shape:
+                residual = nn.Conv(
+                        features=self.config.token_embedding.resnet_block.features,
+                        kernel_size=self.config.token_embedding.resnet_block.kernel_size,
+                        strides=self.config.token_embedding.resnet_block.strides,
+                        padding=self.config.token_embedding.resnet_block.padding,
+                        kernel_init=nn.with_partitioning(
+                            initializers.he_normal(),
+                            (None, 'model')
+                            ),
+                        bias_init=nn.with_partitioning(
+                            initializers.he_normal(),
+                            (None, 'model'),
+                            )
+                )(residual)
+      
+            x = x+residual
+            
+            #flatten output
+            x = jnp.reshape(x, (*x.shape[:3], -1))
+            x = nn.Dense(
+                    features=self.config.embedding_dim,
+                    kernel_init=nn.with_partitioning(
+                        initializers.he_normal(),
+                        (None, 'model')
+                        ),
+                    bias_init=nn.with_partitioning(
+                        initializers.he_normal(),
+                        (None, 'model'),
+                        )
+                    )(x) 
+
+
+        else:
+            # start with convolution projection
+            x = nn.Conv(
+                    features=self.config.token_embedding.input_projection.features,
+                    kernel_size=self.config.token_embedding.input_projection.kernel_size,
+                    strides=self.config.token_embedding.input_projection.strides,
+                    padding=self.config.token_embedding.input_projection.padding,
+                    kernel_init=nn.initializers.xavier_normal(),
+                    )(x)
+            x = nn.max_pool(
+                    x, 
+                    window_shape=self.config.token_embedding.input_projection.pool.window_shape, 
+                    strides=self.config.token_embedding.input_projection.pool.strides,
+                    )
+
+            # resnetv2block
+            residual = x
+
+            x = nn.GroupNorm()(x)
+            x = nn.gelu(x)
+            x = nn.Conv(
                     features=self.config.token_embedding.resnet_block.features,
                     kernel_size=self.config.token_embedding.resnet_block.kernel_size,
                     strides=self.config.token_embedding.resnet_block.strides,
                     padding=self.config.token_embedding.resnet_block.padding,
                     kernel_init=nn.initializers.xavier_normal(),
-            )(residual)
-  
-        x = x+residual
-        
-        #flatten output
-        x = jnp.reshape(x, (*x.shape[:3], -1))
-        x = nn.Dense(
-                features=self.config.embedding_dim,
-                kernel_init=nn.initializers.xavier_normal(),
-                )(x) 
+                    )(x)
+            
+            x = nn.GroupNorm()(x)
+            x = nn.gelu(x)
+            x = nn.Conv(
+                    features=self.config.token_embedding.resnet_block.features,
+                    kernel_size=self.config.token_embedding.resnet_block.kernel_size,
+                    strides=self.config.token_embedding.resnet_block.strides,
+                    padding=self.config.token_embedding.resnet_block.padding,
+                    kernel_init=nn.initializers.xavier_normal(),
+                    )(x)
+
+            if residual.shape != x.shape:
+                residual = nn.Conv(
+                        features=self.config.token_embedding.resnet_block.features,
+                        kernel_size=self.config.token_embedding.resnet_block.kernel_size,
+                        strides=self.config.token_embedding.resnet_block.strides,
+                        padding=self.config.token_embedding.resnet_block.padding,
+                        kernel_init=nn.initializers.xavier_normal(),
+                )(residual)
+      
+            x = x+residual
+            
+            #flatten output
+            x = jnp.reshape(x, (*x.shape[:3], -1))
+            x = nn.Dense(
+                    features=self.config.embedding_dim,
+                    kernel_init=nn.initializers.xavier_normal(),
+                    )(x) 
 
         return x
 
@@ -216,8 +303,30 @@ class ImageTokenizer(nn.Module):
         self.position_interval = self.config["position_interval"]
         self.normalize = self.config["normalize"]
         self.embedding_function = ResNetV2Block(config=self.config)
-        self.row_embeddings = nn.Embed(self.position_interval, self.config.embedding_dim)
-        self.col_embeddings = nn.Embed(self.position_interval, self.config.embedding_dim)
+        if self.config.train_parallel:
+            self.row_embeddings = nn.Embed(
+                    self.position_interval, 
+                    self.config.embedding_dim,
+                    embedding_init=nn.with_partitioning(
+                        initializers.variance_scaling(
+                            1.0, 'fan_in', 'normal', out_axis=0
+                            ),
+                        (None, 'model')
+                        )
+                    )
+            self.col_embeddings = nn.Embed(
+                    self.position_interval, 
+                    self.config.embedding_dim,
+                    embedding_init=nn.with_partitioning(
+                        initializers.variance_scaling(
+                            1.0, 'fan_in', 'normal', out_axis=0
+                            ),
+                        (None, 'model')
+                        )
+                    )
+        else:
+            self.row_embeddings = nn.Embed(self.position_interval, self.config.embedding_dim)
+            self.col_embeddings = nn.Embed(self.position_interval, self.config.embedding_dim)
         self.rng_collection = self.config["rng_collection"]
 
     def __call__(self, image, train=True):
