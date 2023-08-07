@@ -139,7 +139,7 @@ class ResNetV2Block(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        if config.train_parallel:
+        if self.config.train_parallel:
             # start with convolution projection
             x = nn.Conv(
                     features=self.config.token_embedding.input_projection.features,
