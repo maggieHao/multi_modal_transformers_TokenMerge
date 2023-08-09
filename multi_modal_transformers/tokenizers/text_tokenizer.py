@@ -15,6 +15,8 @@ from jax import random
 import numpy as np
 import einops as e
 
+from hydra.utils import instantiate, call
+
 # multi-processing
 import multiprocessing as mp
 from multiprocessing import Pool
@@ -93,49 +95,24 @@ class BasicTextTokenizer(nn.Module):
 
     def setup(self):
         
-        if self.config.train_parallel:
-            self.embedding = nn.Embed(
-                    num_embeddings=self.config["vocab_size"],
-                    features=self.config["embedding_dim"],
-                    embedding_init=nn.with_partitioning(
-                    initializers.variance_scaling(
-                        1.0, 'fan_in', 'normal', out_axis=0
-                        ), 
-                    (None, 'model')),
-                    )
-            
-            self.position_embedding = self.param(
-                    'text_pos_embedding', 
-                    nn.with_partitioning(
-                        nn.initializers.normal(stddev=0.02),
-                        (None, 'model')
-                        ),
-                    (self.config["max_text_len"],
-                    self.config["embedding_dim"])
-                    )
-        
-        else:
-            self.embedding = nn.Embed(
-                    num_embeddings=self.config["vocab_size"],
-                    features=self.config["embedding_dim"],
-                    )
-            
-            self.position_embedding = self.param(
-                    'text_pos_embedding', 
-                    nn.initializers.normal(stddev=0.02), 
-                    (self.config["max_text_len"],
-                    self.config["embedding_dim"])
-                    )
+        self.embedding = instantiate(self.config["text_embedding"])
+
+            #self.position_embedding = self.param(
+            #        'text_pos_embedding', 
+            #        nn.initializers.normal(stddev=0.02), 
+            #        (self.config["max_text_len"],
+            #        self.config["embedding_dim"])
+            #        )
 
     def __call__(self, tokens):
         # embed text
         word_embeddings = self.embedding(tokens)
         
         # add position embedding
-        positions = jnp.arange(tokens.shape[1])
-        positions = e.repeat(positions, "pos -> batch pos", batch=tokens.shape[0])
+        #positions = jnp.arange(tokens.shape[1])
+        #positions = e.repeat(positions, "pos -> batch pos", batch=tokens.shape[0])
 
-        return word_embeddings + self.position_embedding
+        return word_embeddings #+ self.position_embedding
 
 
 if __name__=="__main__":

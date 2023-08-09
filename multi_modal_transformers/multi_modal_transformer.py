@@ -20,6 +20,8 @@ from multi_modal_transformers.tokenizers.text_tokenizer import BasicTextTokenize
 from multi_modal_transformers.transformer_components import Encoder1DBlock
 
 
+from hydra.utils import instantiate
+
 def combine_embeddings(
     text_embeddings, image_embeddings, action_embeddings, observation_position_embeddings
 ):
@@ -111,7 +113,9 @@ class ConceptLearner(nn.Module):
         # action embeddings
         action_tokenizer = ActionTokenizer(config=self.config.action_tokenizer)
         action_embeddings = action_tokenizer(actions)
+        
 
+        # TODO: investigate moving to config
         # positional encoding of observation tokens
         if self.config.train_parallel:
             observation_position_embeddings = self.param(
@@ -143,24 +147,20 @@ class ConceptLearner(nn.Module):
             actions,
             image_embeddings,
             text_embeddings,
-            self.config.self_attention.num_heads,
+            self.config.transformer.self_attention.num_heads,
         )
 
         # pass through self attention layer
-        config_= self.config.self_attention.copy()
-        config_.out_dim = None
+        num_blocks = self.config.transformer.num_blocks
         # TODO: replace for loop with flax.linen.scan
-        for i in range(self.config.self_attention.num_blocks):
-            if i != self.config.self_attention.num_blocks - 1:
-                x = Encoder1DBlock(config_)(
-                    x,
-                    mask=attention_mask,
-                )
-            else:
-                x = Encoder1DBlock(self.config.self_attention)(
-                    x,
-                    mask=attention_mask,
-                )
+        for i in range(num_blocks):
+            x = Encoder1DBlock(self.config.transformer)(
+                x,
+                mask=attention_mask,
+            )
+        
+        # pass through final linear layer
+        x = instantiate(self.config.transformer.output_dense)(x)
 
         # get action logits at appropriate timestep
         action_logits = slice_action_sequence(actions, x, text_embeddings.shape[1], num_tokens_per_image +1)
