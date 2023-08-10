@@ -190,7 +190,7 @@ class ImageTokenizer(nn.Module):
     def __call__(self, image, train=True):
         """
         Args:
-            images (jax.numpy.ndarray): the images to be tokenized (num_batches, num_sequences, num_images, H, W, C).
+            images (jax.numpy.ndarray): the images to be tokenized (num_batches, num_images, H, W, C).
         """
         # get dimensions
         batch_size, num_images, h, w, c = image.shape
@@ -263,6 +263,92 @@ class ImageTokenizer(nn.Module):
 
         # reshape back to original shape
         #patch_embeddings = jnp.reshape(patch_embeddings, (batch_size, num_images, num_tokens,-1))
+        
+        return patch_embeddings
+
+
+# for now write separate tokenizer for single images
+class SingleImageTokenizer(nn.Module):
+    """
+    Converts images into tokens.
+    """
+
+    config: dict
+    
+    # TODO: move to @nn.compact
+    def setup(self):
+        self.image_size = self.config["image_size"]
+        self.patch_size = self.config["patch_size"]
+        self.position_interval = self.config["position_interval"]
+        self.normalize = self.config["normalize"]
+        self.embedding_function = ResNetV2Block(config=self.config["resnet"]) # consider refactoring to use instantiate
+        self.row_embeddings = instantiate(self.config["row_position_embedding"])
+        self.col_embeddings = instantiate(self.config["col_position_embedding"])
+        self.rng_collection = self.config["rng_collection"]
+
+    def __call__(self, image, train=True):
+        """
+        Args:
+            images (jax.numpy.ndarray): the images to be tokenized (num_batches, num_images, H, W, C).
+        """
+        # get dimensions
+        batch_size, h, w, c = image.shape
+        num_tokens = (h // self.patch_size) * (w // self.patch_size)
+
+        
+        # exit if image is not the correct size
+        if image.shape[-3:] != self.image_size:
+            print(image.shape[-3:])
+            print(self.image_size)
+            sys.exit("Input image is not the correct size.")
+
+        # convert image into patches
+        patches = jax.vmap(
+                    image_to_patches, 
+                    in_axes=(0, None, None), 
+                    out_axes=0
+                    )(
+                    image, 
+                    self.patch_size, 
+                    self.normalize
+                    )
+
+        # create position encodings
+        if train:
+            key = self.make_rng(self.rng_collection)
+            keys = jax.random.split(key, (batch_size,num_images))
+            row_position_encoding, col_position_encoding = jax.vmap(
+                        encode_patch_position, 
+                        in_axes=(0, 0, None, None, None), 
+                        out_axes=0)(
+                            image,
+                            keys,
+                            self.patch_size, 
+                            self.position_interval,
+                            train
+                            )
+        else:
+            keys = None
+            row_position_encoding, col_position_encoding = jax.vmap(
+                        encode_patch_position, 
+                        in_axes=(0, None, None, None, None), 
+                        out_axes=0)(
+                image,
+                keys,
+                self.patch_size, 
+                self.position_interval,
+                train
+                )
+
+        # create position embeddings 
+        row_position_embeddings = self.row_embeddings(row_position_encoding)
+        col_position_embeddings = self.col_embeddings(col_position_encoding)
+
+        # create patch embeddings
+        patch_embeddings = self.embedding_function(patches)
+
+        # add position embeddings to patch embeddings (broadcasting)
+        patch_embeddings = patch_embeddings + row_position_embeddings + col_position_embeddings
         
         return patch_embeddings
 
