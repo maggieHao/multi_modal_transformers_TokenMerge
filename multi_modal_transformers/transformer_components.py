@@ -20,13 +20,13 @@ class MLPBlock(nn.Module):
     config: dict
 
     @nn.compact
-    def __call__(self, inputs):
+    def __call__(self, inputs, train=False):
         """Apply MLPBlock module."""
         x = instantiate(self.config["dense"])(inputs)
         x = call(self.config["activation"])(x)
-        x = instantiate(self.config["norm"])(x)
+        x = instantiate(self.config["norm"])(x, not train)
         x = instantiate(self.config["dense_out"])(x)
-        x = instantiate(self.config["norm"])(x)
+        x = instantiate(self.config["norm"])(x, not train)
 
         return x
 
@@ -41,7 +41,7 @@ class Encoder1DBlock(nn.Module):
     config: dict
 
     @nn.compact
-    def __call__(self, inputs, deterministic=False, out=False, mask=None):
+    def __call__(self, inputs, train=False, mask=None):
         """Apply Encoder1DBlock module.
 
         Args:
@@ -55,13 +55,13 @@ class Encoder1DBlock(nn.Module):
 
         # Attention block.
         x = instantiate(config.layer_norm)(inputs)
-        x = instantiate(config.self_attention)(x, mask)
-        x = instantiate(config.dropout)(x, deterministic=deterministic)
+        x = instantiate(config.self_attention)(x, mask, not train)
+        x = instantiate(config.dropout)(x, not train)
         
         x = x + inputs
 
         # MLP block.
         y = instantiate(config.layer_norm)(x)
-        y = MLPBlock(config=config.mlp_block)(y)
+        y = MLPBlock(config.mlp_block)(y, train)
 
         return x + y

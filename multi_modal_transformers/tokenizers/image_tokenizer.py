@@ -175,7 +175,8 @@ class ImageTokenizer(nn.Module):
     """
 
     config: dict
-
+    
+    # TODO: move to @nn.compact
     def setup(self):
         self.image_size = self.config["image_size"]
         self.patch_size = self.config["patch_size"]
@@ -195,8 +196,6 @@ class ImageTokenizer(nn.Module):
         batch_size, num_images, h, w, c = image.shape
         num_tokens = (h // self.patch_size) * (w // self.patch_size)
 
-        # flatten [batch*num_images, h, w, c]
-        #image_flat = jnp.reshape(image, (-1, *image.shape[-3:]))
         
         # exit if image is not the correct size
         if image.shape[-3:] != self.image_size:

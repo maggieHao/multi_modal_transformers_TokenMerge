@@ -96,23 +96,18 @@ class BasicTextTokenizer(nn.Module):
     def setup(self):
         
         self.embedding = instantiate(self.config["text_embedding"])
-
-            #self.position_embedding = self.param(
-            #        'text_pos_embedding', 
-            #        nn.initializers.normal(stddev=0.02), 
-            #        (self.config["max_text_len"],
-            #        self.config["embedding_dim"])
-            #        )
+        self.position_embedding = instantiate(self.config["text_position_embedding"])
 
     def __call__(self, tokens):
         # embed text
         word_embeddings = self.embedding(tokens)
         
         # add position embedding
-        #positions = jnp.arange(tokens.shape[1])
-        #positions = e.repeat(positions, "pos -> batch pos", batch=tokens.shape[0])
+        positions = jnp.arange(tokens.shape[1])
+        positions = e.repeat(positions, "pos -> batch pos", batch=tokens.shape[0])
+        position_embeddings = self.position_embedding(positions)
 
-        return word_embeddings #+ self.position_embedding
+        return word_embeddings + position_embeddings
 
 
 if __name__=="__main__":

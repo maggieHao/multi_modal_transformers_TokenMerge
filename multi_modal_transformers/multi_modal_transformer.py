@@ -68,7 +68,7 @@ def generate_attention_mask(actions, image_embeddings, text_embeddings, num_head
     # 1D attention mask -> multi-head attention
     multi_head_attention_mask = e.repeat(
         attention_mask,
-        "batch head_dim q k -> batch (head_dim repeats) q k",
+        "batch head_dim q k -> batch (repeats head_dim) q k",
         repeats=num_heads,
     )
 
@@ -97,10 +97,11 @@ class ConceptLearner(nn.Module):
 
     # TODO: move parameters to single batch parameter
     @nn.compact
-    def __call__(self, text, images, actions, train=True):
+    def __call__(self, text, images, actions, train=False):
         """Forward pass through the model."""
         # Tokenization + Generate Input Embeddings
-        
+        batch_size = text.shape[0]
+
         # text embeddings
         text_tokenizer = BasicTextTokenizer(config=self.config.text_tokenizer)
         text_embeddings = text_tokenizer(text)
@@ -117,21 +118,10 @@ class ConceptLearner(nn.Module):
 
         # TODO: investigate moving to config
         # positional encoding of observation tokens
-        if self.config.train_parallel:
-            observation_position_embeddings = self.param(
-                "observation_embeddings",
-                nn.with_partitioning(
-                    nn.initializers.normal(stddev=0.02),
-                    (None, 'model')
-                    )
-                (num_tokens_per_image + 1, self.config.token_embedding_dim),
-                    )
-        else:
-            observation_position_embeddings = self.param(
-                "observation_embeddings",
-                nn.initializers.normal(stddev=0.02),
-                (num_tokens_per_image + 1, self.config.token_embedding_dim),
-                    )
+        observation_position_embeddings = instantiate(self.config.observation_position_embedding) # partial
+        observation_positions = jnp.arange(num_tokens_per_image + 1)
+        observation_positions = e.repeat(observation_positions, "tokens -> batch seq tokens", batch=batch_size, seq=self.config.max_seq_len)
+        observation_position_embeddings = observation_position_embeddings(num_embeddings=num_tokens_per_image + 1)(observation_positions)
         
         # combine embeddings
         x = combine_embeddings(
@@ -157,6 +147,7 @@ class ConceptLearner(nn.Module):
             x = Encoder1DBlock(self.config.transformer)(
                 x,
                 mask=attention_mask,
+                train=train,
             )
         
         # pass through final linear layer
