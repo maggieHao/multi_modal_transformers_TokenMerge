@@ -10,7 +10,8 @@ from flax.linen import initializers
 import einops as e
 
 # custom tokenizers
-from multi_modal_transformers.tokenizers.image_tokenizer import ImageTokenizer
+from multi_modal_transformers.tokenizers.text_tokenizer import BasicTextTokenizer
+from multi_modal_transformers.tokenizers.image_tokenizer import SingleImageTokenizer
 
 # transformer modules
 from multi_modal_transformers.transformer_components import Encoder1DBlock
@@ -23,7 +24,7 @@ class ConceptPlanner(nn.Module):
     config: dict
 
     @nn.compact
-    def __call__(self, images, text):
+    def __call__(self, images, text, train=False):
         # image tokenizer
         image_tokenizer = SingleImageTokenizer(config=self.config.image_tokenizer)
         image_embeddings = image_tokenizer(images, train=train)

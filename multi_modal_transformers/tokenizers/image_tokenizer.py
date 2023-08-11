@@ -165,6 +165,38 @@ class ResNetV2Block(nn.Module):
 
         return x
 
+class ResNetV2Block_(nn.Module):
+    """
+    Note: fixing parameter defaults to match Gato.
+    """
+    config: dict
+
+    @nn.compact
+    def __call__(self, x):
+        # start with convolution projection
+        x = instantiate(self.config.input_projection.conv)(x)
+        x = call(self.config.input_projection.pool)(x)
+
+        # resnetv2block
+        residual = x
+        
+        for _ in range(self.config.num_blocks):
+            x = instantiate(self.config.resnet_block.norm)(x)
+            x = call(self.config.resnet_block.activation)(x)
+            x = instantiate(self.config.resnet_block.conv)(x)
+
+        if residual.shape != x.shape:
+            residual = instantiate(self.config.resnet_block.conv)(residual)
+  
+        x = x+residual
+        
+        #flatten output
+        x = jnp.reshape(x, (*x.shape[:2], -1))
+        x = instantiate(self.config.output_projection.dense)(x)
+
+        return x
+
+
 ########################
 # Image Tokenizer
 ########################
@@ -261,9 +293,6 @@ class ImageTokenizer(nn.Module):
         # add position embeddings to patch embeddings (broadcasting)
         patch_embeddings = patch_embeddings + row_position_embeddings + col_position_embeddings
 
-        # reshape back to original shape
-        #patch_embeddings = jnp.reshape(patch_embeddings, (batch_size, num_images, num_tokens,-1))
-        
         return patch_embeddings
 
 
@@ -281,7 +310,7 @@ class SingleImageTokenizer(nn.Module):
         self.patch_size = self.config["patch_size"]
         self.position_interval = self.config["position_interval"]
         self.normalize = self.config["normalize"]
-        self.embedding_function = ResNetV2Block(config=self.config["resnet"]) # consider refactoring to use instantiate
+        self.embedding_function = ResNetV2Block_(config=self.config["resnet"]) # consider refactoring to use instantiate
         self.row_embeddings = instantiate(self.config["row_position_embedding"])
         self.col_embeddings = instantiate(self.config["col_position_embedding"])
         self.rng_collection = self.config["rng_collection"]
@@ -313,6 +342,7 @@ class SingleImageTokenizer(nn.Module):
                     self.normalize
                     )
 
+
         # create position encodings
         if train:
             key = self.make_rng(self.rng_collection)
@@ -339,10 +369,11 @@ class SingleImageTokenizer(nn.Module):
                 self.position_interval,
                 train
                 )
-
+        
         # create position embeddings 
         row_position_embeddings = self.row_embeddings(row_position_encoding)
         col_position_embeddings = self.col_embeddings(col_position_encoding)
+        
 
         # create patch embeddings
         patch_embeddings = self.embedding_function(patches)
