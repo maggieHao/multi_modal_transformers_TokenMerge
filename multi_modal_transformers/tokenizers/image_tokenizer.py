@@ -346,7 +346,7 @@ class SingleImageTokenizer(nn.Module):
         # create position encodings
         if train:
             key = self.make_rng(self.rng_collection)
-            keys = jax.random.split(key, (batch_size,num_images))
+            keys = jax.random.split(key, (batch_size,))
             row_position_encoding, col_position_encoding = jax.vmap(
                         encode_patch_position, 
                         in_axes=(0, 0, None, None, None), 

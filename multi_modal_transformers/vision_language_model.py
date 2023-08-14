@@ -18,6 +18,12 @@ from multi_modal_transformers.transformer_components import Encoder1DBlock
 
 from hydra.utils import instantiate
 
+
+def slice_text_sequence(embeddings, text, num_tokens_per_image):
+    """Retrieve next token index from text sequence."""
+    text_idx = jnp.argmax(text == 0, axis=-1)
+    return embeddings[jnp.arange(embeddings.shape[0]), (num_tokens_per_image + text_idx), :]
+
 class ConceptPlanner(nn.Module):
     """A Vision Language Model that suggests concepts to execute."""
 
@@ -42,7 +48,7 @@ class ConceptPlanner(nn.Module):
         text_mask = jnp.where(text == 0, 0, 1)
 
         # concatenate image and text masks
-        attention_mask_input = e.pack((image_mask, text_mask), "batch *")
+        attention_mask_input, ps = e.pack((image_mask, text_mask), "batch *")
         attention_mask = nn.make_attention_mask(
             attention_mask_input>0,
             attention_mask_input>0,
@@ -51,7 +57,7 @@ class ConceptPlanner(nn.Module):
         multi_head_attention_mask = e.repeat(
             attention_mask,
             "batch head_dim q k -> batch (repeats head_dim) q k",
-            repeats=num_heads,
+            repeats=self.config.transformer.self_attention.num_heads,
         )
 
         num_blocks = self.config.transformer.num_blocks
@@ -68,6 +74,6 @@ class ConceptPlanner(nn.Module):
         
         # get next token logits
         # TODO: implement correct indexing to get next token
-        next_token_logits = None
+        next_token_logits = slice_text_sequence(x, text, num_tokens_per_image)
 
         return next_token_logits
