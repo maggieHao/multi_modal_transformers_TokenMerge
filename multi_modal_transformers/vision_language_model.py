@@ -1,6 +1,7 @@
 """
 Vision Langauge Model (VLM) implementation.
 """
+from functools import partial
 
 # deep learning framework
 import jax
@@ -30,35 +31,35 @@ class ImageTextTokenizer(nn.Module):
     Example sequence: image_tok, image_tok, ..., image_tok, text_tok, text_tok, ..., text_tok
     """
     
-        config: dict
-    
-        @nn.compact
-        def __call__(self, text, images, train=False):
-            """Tokenize text, image, and action embeddings."""
-            # image tokenizer
-            image_tokenizer = SingleImageTokenizer(config=self.config.image_tokenizer)
-            image_embeddings = image_tokenizer(images, train=train)
-            batch_size, num_tokens_per_image, _ = image_embeddings.shape
-            
-            # text tokenizer
-            text_tokenizer = BasicTextTokenizer(config=self.config.text_tokenizer)
-            text_embeddings = text_tokenizer(text)
+    config: dict
 
-            # concatenate image and text embeddings
-            token_embeddings, ps = e.pack((image_embeddings, text_embeddings), "batch * features")
+    @nn.compact
+    def __call__(self, images, text, train=False):
+        """Tokenize text, image, and action embeddings."""
+        # image tokenizer
+        image_tokenizer = SingleImageTokenizer(config=self.config.image_tokenizer)
+        image_embeddings = image_tokenizer(images, train=train)
+        batch_size, num_tokens_per_image, _ = image_embeddings.shape
+        
+        # text tokenizer
+        text_tokenizer = BasicTextTokenizer(config=self.config.text_tokenizer)
+        text_embeddings = text_tokenizer(text)
 
-            # create an attention mask for text embeddings
-            image_mask = jnp.ones((batch_size, num_tokens_per_image))
-            text_mask = jnp.where(text == 0, 0, 1)
+        # concatenate image and text embeddings
+        token_embeddings, ps = e.pack((image_embeddings, text_embeddings), "batch * features")
 
-            # concatenate image and text masks
-            attention_mask_input, ps = e.pack((image_mask, text_mask), "batch *")
-            attention_mask = nn.make_attention_mask(
-                attention_mask_input>0,
-                attention_mask_input>0,
-                    )
+        # create an attention mask for text embeddings
+        image_mask = jnp.ones((batch_size, num_tokens_per_image))
+        text_mask = jnp.where(text == 0, 0, 1)
 
-            return token_embeddings, attention_mask
+        # concatenate image and text masks
+        attention_mask_input, ps = e.pack((image_mask, text_mask), "batch *")
+        attention_mask = nn.make_attention_mask(
+            attention_mask_input>0,
+            attention_mask_input>0,
+                )
+
+        return token_embeddings, attention_mask
 
 
 # decoder-only transformer
@@ -80,6 +81,8 @@ class DecoderTransformer(nn.Module):
         
         num_blocks = self.config.transformer.num_blocks
         # TODO: replace for loop with flax.linen.scan
+        
+
         for i in range(num_blocks):
             x = Encoder1DBlock(self.config.transformer)(
                 token_embeddings,
@@ -99,8 +102,8 @@ class TokenLogitHead(nn.Module):
     @nn.compact
     def __call__(self, contextual_embeddings, token_idx):
         """Token logits."""
-        token_logits = instantiate(self.config.token_logits)(contextual_embeddings)
-        return token_logits[jnp.arange(token_logits.shape[0]), token_idx, :]
+        token_logits = instantiate(self.config.transformer.token_logit_head)(contextual_embeddings)
+        return token_logits[jnp.arange(token_logits.shape[0]), token_idx.astype(int), :]
 
 
 class StateValueHead(nn.Module):
@@ -111,7 +114,7 @@ class StateValueHead(nn.Module):
     @nn.compact
     def __call__(self, contextual_embeddings):
         """State value."""
-        return instantiate(self.config.state_value)(contextual_embeddings)
+        return instantiate(self.config.transformer.state_value_head)(contextual_embeddings)
 
 
 # indexing functions
@@ -134,18 +137,31 @@ class ConceptPlanAgent:
     token_logits_params: dict
     state_value_params: dict
 
+    @property
+    def params(self):
+        return {
+                "params": {
+            "tokenizer_params": self.tokenizer_params["params"],
+            "transformer_params": self.transformer_params["params"],
+            "token_logits_params": self.token_logits_params["params"],
+            "state_value_params": self.state_value_params["params"],
+            }
+        }
+
+
+# TODO: define a model class with multiple inference methods
 
 # model inference
-@partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
-def predict_next_token(agent_state, images, text, train=False, search="greedy", tokenize, embed_tokens, predict_token_logits):
+@partial(jax.jit, static_argnums=(3, 4))
+def predict_next_token(agent_state, images, text, train=False, search="greedy"):
     """Predict next token."""
     # get index of next token
     next_token_idx = get_imagetext_idx(text, agent_state.params.tokenizer_params.num_tokens_per_image)
     
     # tokenize, embed, and predict next token
-    input_token_embeddings, attention_mask = tokenize(agent_state.params.tokenizer_params, images, text, train=train)
-    contextual_embeddings = embed_tokens(agent_state.params.transformer_params, input_token_embeddings, attention_mask, train=train)
-    next_token_logits = predict_token_logits(agent_state.params.token_logits_params, contextual_embeddings, next_token_idx, train=train)
+    input_token_embeddings, attention_mask = agent_state.tokenize(agent_state.params.tokenizer_params, images, text, train=train)
+    contextual_embeddings = agent_state.embed(agent_state.params.transformer_params, input_token_embeddings, attention_mask, train=train)
+    next_token_logits = agent_state.token_logits(agent_state.params.token_logits_params, contextual_embeddings, next_token_idx, train=train)
 
     # choose next token using search strategy
     if search == "greedy":
@@ -158,8 +174,8 @@ def predict_next_token(agent_state, images, text, train=False, search="greedy", 
     return next_token, next_token_log_prob
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8))
-def predict_concept_and_value(agent_state, images, train=False, search="greedy", tokenize, embed_tokens, predict_token_logits, predict_state_value):
+@partial(jax.jit, static_argnums=(2, 3))
+def predict_concept_and_value(agent_state, images, train=False, search="greedy"):
     """Autoregressively generate a sequence of tokens that defines a concept to execute."""
     # initialize text with padding token
     text = jnp.zeros((images.shape[0], 4), dtype=jnp.int32) # replace 4 with max sequence length from config
@@ -169,15 +185,15 @@ def predict_concept_and_value(agent_state, images, train=False, search="greedy",
     for idx in range(4): # replace 4 with max sequence length from config:
         # predict state value before text generation
         if idx == 0:
-            state_value = predict_state_value(agent_state.params.state_value_params, contextual_embeddings, train=train)
+            state_value = agent_state.state_value(agent_state.params.state_value_params, contextual_embeddings, train=train)
         
         # get index of next token
         next_token_idx = get_imagetext_idx(text, agent_state.params.tokenizer_params.num_tokens_per_image)
         
         # predict next token
-        input_token_embeddings, attention_mask = tokenize(agent_state.params.tokenizer_params, images, text, train=train)
-        contextual_embeddings = embed_tokens(agent_state.params.transformer_params, input_token_embeddings, attention_mask, train=train)
-        next_token_logits = predict_token_logits(agent_state.params.token_logits_params, contextual_embeddings, next_token_idx, train=train)
+        input_token_embeddings, attention_mask = agent_state.tokenize(agent_state.params.tokenizer_params, images, text, train=train)
+        contextual_embeddings = agent_state.embed(agent_state.params.transformer_params, input_token_embeddings, attention_mask, train=train)
+        next_token_logits = agent_state.token_logits(agent_state.params.token_logits_params, contextual_embeddings, next_token_idx, train=train)
 
         # choose next token using search strategy
         if search == "greedy":
