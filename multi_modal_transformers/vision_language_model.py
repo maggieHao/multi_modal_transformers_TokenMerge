@@ -124,103 +124,129 @@ def get_imagetext_idx(text, num_tokens_per_image):
     return num_tokens_per_image + text_idx
 
 
-# storing model parameters
-@flax.struct.dataclass
-class ConceptPlanAgent:
-    # mapping from tokens to input embeddings
-    tokenizer_params: dict
-
-    # transformer self-attention layers
-    transformer_params: dict
-
-    # output prediction layers
-    token_logits_params: dict
-    state_value_params: dict
-
-    @property
-    def params(self):
-        return {
-                "params": {
-            "tokenizer_params": self.tokenizer_params["params"],
-            "transformer_params": self.transformer_params["params"],
-            "token_logits_params": self.token_logits_params["params"],
-            "state_value_params": self.state_value_params["params"],
-            }
-        }
-
-
 # TODO: define a model class with multiple inference methods
 
-# model inference
-@partial(jax.jit, static_argnums=(3, 4))
-def predict_next_token(agent_state, images, text, train=False, search="greedy"):
-    """Predict next token."""
-    # get index of next token
-    next_token_idx = get_imagetext_idx(text, agent_state.params.tokenizer_params.num_tokens_per_image)
-    
-    # tokenize, embed, and predict next token
-    input_token_embeddings, attention_mask = agent_state.tokenize(agent_state.params.tokenizer_params, images, text, train=train)
-    contextual_embeddings = agent_state.embed(agent_state.params.transformer_params, input_token_embeddings, attention_mask, train=train)
-    next_token_logits = agent_state.token_logits(agent_state.params.token_logits_params, contextual_embeddings, next_token_idx, train=train)
+class ConceptPlanner(nn.Module):
+    """Concept planner."""
 
-    # choose next token using search strategy
-    if search == "greedy":
-        # get next token and log probability
-        next_token = jnp.argmax(next_token_logits, axis=-1)
-        next_token_log_prob = jax.nn.log_softmax(next_token_logits, axis=-1)[jnp.arange(next_token_logits.shape[0]), next_token]
-    else:
-        raise NotImplementedError
+    config: dict
 
-    return next_token, next_token_log_prob
-
-
-@partial(jax.jit, static_argnums=(2, 3))
-def predict_concept_and_value(agent_state, images, train=False, search="greedy"):
-    """Autoregressively generate a sequence of tokens that defines a concept to execute."""
-    # initialize text with padding token
-    text = jnp.zeros((images.shape[0], 4), dtype=jnp.int32) # replace 4 with max sequence length from config
-    text_log_probs = jnp.zeros((images.shape[0], 1), dtype=jnp.float32) # replace 4 with max sequence length from config
-    terminate_mask = jnp.zeros((images.shape[0], 4), dtype=jnp.int32) # replace 4 with max sequence length from config
-    
-    for idx in range(4): # replace 4 with max sequence length from config:
-        # predict state value before text generation
-        if idx == 0:
-            state_value = agent_state.state_value(agent_state.params.state_value_params, contextual_embeddings, train=train)
+    def setup(self):
+        """Initialize model components."""
         
+        # define model components
+        self.tokenizer = ImageTextTokenizer(self.config)
+        self.transformer = DecoderTransformer(self.config)
+        self.token_logit_head = TokenLogitHead(self.config)
+        self.state_value_head = StateValueHead(self.config)
+    
+        # simplify accessing values from config
+        self.num_tokens_per_image = self.config.image_tokenizer.num_tokens_per_image
+
+    #@partial(jax.jit, static_argnums=(2,))
+    def predict_next_token_logits(self, image, text, train=False):
+        """Predict next token logits."""
         # get index of next token
-        next_token_idx = get_imagetext_idx(text, agent_state.params.tokenizer_params.num_tokens_per_image)
+        next_token_idx = get_imagetext_idx(text, self.num_tokens_per_image)
         
-        # predict next token
-        input_token_embeddings, attention_mask = agent_state.tokenize(agent_state.params.tokenizer_params, images, text, train=train)
-        contextual_embeddings = agent_state.embed(agent_state.params.transformer_params, input_token_embeddings, attention_mask, train=train)
-        next_token_logits = agent_state.token_logits(agent_state.params.token_logits_params, contextual_embeddings, next_token_idx, train=train)
+        # tokenize, embed, and predict next token
+        input_token_embeddings, attention_mask = self.tokenizer(image, text, train=train)
+        contextual_embeddings = self.transformer(input_token_embeddings, attention_mask, train=train)
+        next_token_logits = self.token_logit_head(contextual_embeddings, next_token_idx)
+
+        return next_token_logits
+    
+    @partial(jax.jit, static_argnums=(2,3))
+    def predict_next_token(self, image, text, train=False, search="greedy"):
+        """Predict next token."""
+        # predict next token logits
+        next_token_logits = self.predict_next_token_logis(image, text, train=train)
 
         # choose next token using search strategy
         if search == "greedy":
-            # get next token
+            # get next token and log probability
             next_token = jnp.argmax(next_token_logits, axis=-1)
+            next_token_log_prob = jax.nn.log_softmax(next_token_logits, axis=-1)[jnp.arange(next_token_logits.shape[0]), next_token]
         else:
             raise NotImplementedError
-        
-        # get log probability of next token
-        next_token_log_prob = jax.nn.log_softmax(next_token_logits, axis=-1)[jnp.arange(next_token_log_prob.shape[0]), next_token]
-        
-        # apply terminate mask to log probability
-        next_token_log_prob = jnp.where(terminate_mask, 0, next_token_log_prob)
-        
-        # update text sequence log probability
-        text_log_probs += next_token_log_prob
-        
-        # mask next token with terminate mask
-        next_token = jnp.where(terminate_mask, 0, next_token)
 
-        # set next token value in text
-        def set_token_value(text, idx, token):
-            text = text.at[idx].set(token)
+        return next_token, next_token_log_prob
+    
+    def __call__(self, image, text, train=False, search="greedy"):
+        """
+        Predict token logits and state value.
 
-        text = jax.vmap(set_token_value, in_axes=(0, None, None))(text, idx, next_token)
+        Used to initialise model params.
+        """
+        # get index of next token
+        next_token_idx = get_imagetext_idx(text, self.num_tokens_per_image)
         
-        # update terminate mask
-        terminate_mask = jnp.logical_or(terminate_mask, next_token == 5)
+        # tokenize, embed, and predict next token
+        input_token_embeddings, attention_mask = self.tokenizer(image, text, train=train)
+        contextual_embeddings = self.transformer(input_token_embeddings, attention_mask, train=train)
+        next_token_logits = self.token_logit_head(contextual_embeddings, next_token_idx)
+        state_value = self.state_value_head(contextual_embeddings)
+
+        # choose next token using search strategy
+        if search == "greedy":
+            # get next token and log probability
+            next_token = jnp.argmax(next_token_logits, axis=-1)
+            next_token_log_prob = jax.nn.log_softmax(next_token_logits, axis=-1)[jnp.arange(next_token_logits.shape[0]), next_token]
+        else:
+            raise NotImplementedError
+
+        return next_token, next_token_log_prob, state_value
+
+    @partial(jax.jit, static_argnums=(1,2))
+    def predict_concept_and_value(self, images, train=False, search="greedy"):
+        """Autoregressively generate a sequence of tokens that defines a concept to execute."""
+        # initialize text with padding token
+        text = jnp.zeros((images.shape[0], 4), dtype=jnp.int32) # replace 4 with max sequence length from config
+        text_log_probs = jnp.zeros((images.shape[0], 1), dtype=jnp.float32) # replace 4 with max sequence length from config
+        terminate_mask = jnp.zeros((images.shape[0], 4), dtype=jnp.int32) # replace 4 with max sequence length from config
         
-    return text, text_log_probs, state_value
+        for idx in range(4): # replace 4 with max sequence length from config:
+            
+            # get index of next token
+            next_token_idx = get_imagetext_idx(text, self.num_tokens_per_image)
+            
+            # predict next token
+            input_token_embeddings, attention_mask = self.tokenizer(images, text, train=train)
+            contextual_embeddings = self.transformer(input_token_embeddings, attention_mask, train=train)
+            
+            next_token_logits = self.token_logit_head(agent_state.params.token_logits_params, contextual_embeddings, next_token_idx, train=train)
+            
+            # predict state value before text generation
+            if idx == 0:
+                state_value = self.state_value_head(contextual_embeddings, train=train)
+
+            # choose next token using search strategy
+            if search == "greedy":
+                # get next token
+                next_token = jnp.argmax(next_token_logits, axis=-1)
+            else:
+                raise NotImplementedError
+            
+            # get log probability of next token
+            next_token_log_prob = jax.nn.log_softmax(next_token_logits, axis=-1)[jnp.arange(next_token_log_prob.shape[0]), next_token]
+            
+            # apply terminate mask to log probability
+            next_token_log_prob = jnp.where(terminate_mask, 0, next_token_log_prob)
+            
+            # update text sequence log probability
+            text_log_probs += next_token_log_prob
+            
+            # mask next token with terminate mask
+            next_token = jnp.where(terminate_mask, 0, next_token)
+
+            # set next token value in text
+            def set_token_value(text, idx, token):
+                text = text.at[idx].set(token)
+
+            text = jax.vmap(set_token_value, in_axes=(0, None, None))(text, idx, next_token)
+            
+            # update terminate mask
+            terminate_mask = jnp.logical_or(terminate_mask, next_token == 5)
+            
+        return text, text_log_probs, state_value
+
