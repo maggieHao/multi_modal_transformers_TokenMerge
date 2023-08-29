@@ -197,7 +197,7 @@ class ConceptPlanner(nn.Module):
 
         return next_token, next_token_log_prob, state_value
 
-    @partial(jax.jit, static_argnums=(1,2))
+    #@partial(jax.jit, static_argnums=(1,2))
     def predict_concept_and_value(self, images, train=False, search="greedy"):
         """Autoregressively generate a sequence of tokens that defines a concept to execute."""
         # initialize text with padding token
@@ -214,11 +214,11 @@ class ConceptPlanner(nn.Module):
             input_token_embeddings, attention_mask = self.tokenizer(images, text, train=train)
             contextual_embeddings = self.transformer(input_token_embeddings, attention_mask, train=train)
             
-            next_token_logits = self.token_logit_head(agent_state.params.token_logits_params, contextual_embeddings, next_token_idx, train=train)
+            next_token_logits = self.token_logit_head(contextual_embeddings, next_token_idx)
             
             # predict state value before text generation
             if idx == 0:
-                state_value = self.state_value_head(contextual_embeddings, train=train)
+                state_value = self.state_value_head(contextual_embeddings)
 
             # choose next token using search strategy
             if search == "greedy":
@@ -228,25 +228,23 @@ class ConceptPlanner(nn.Module):
                 raise NotImplementedError
             
             # get log probability of next token
-            next_token_log_prob = jax.nn.log_softmax(next_token_logits, axis=-1)[jnp.arange(next_token_log_prob.shape[0]), next_token]
+            next_token_log_prob = jax.nn.log_softmax(next_token_logits, axis=-1)[jnp.arange(next_token_logits.shape[0]), next_token]
             
             # apply terminate mask to log probability
-            next_token_log_prob = jnp.where(terminate_mask, 0, next_token_log_prob)
+            next_token_log_prob = jnp.where(terminate_mask[:, idx], 0, next_token_log_prob)
             
             # update text sequence log probability
             text_log_probs += next_token_log_prob
             
             # mask next token with terminate mask
-            next_token = jnp.where(terminate_mask, 0, next_token)
+            next_token = jnp.where(terminate_mask[:, idx], 0, next_token)
 
             # set next token value in text
-            def set_token_value(text, idx, token):
-                text = text.at[idx].set(token)
-
-            text = jax.vmap(set_token_value, in_axes=(0, None, None))(text, idx, next_token)
             
+            text = text.at[:, idx].set(next_token)
+
             # update terminate mask
-            terminate_mask = jnp.logical_or(terminate_mask, next_token == 5)
+            terminate_mask.at[:, idx].set(jnp.logical_or(terminate_mask[:, idx], next_token == 5))
             
         return text, text_log_probs, state_value
 
