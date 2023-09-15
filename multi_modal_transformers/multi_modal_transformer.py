@@ -177,7 +177,7 @@ class ConceptLearnerV2(nn.Module):
         text_embeddings = text_tokenizer(text)
 
         # image embeddings
-        image_tokenizer = ImageTokenizer(config=self.config.image_tokenizer)
+        image_tokenizer = SingleImageTokenizer(config=self.config.image_tokenizer)
         image_embeddings = image_tokenizer(images, train=train)
         batch_size, num_tokens_per_image, _ = image_embeddings.shape
 
