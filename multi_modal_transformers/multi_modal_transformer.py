@@ -157,3 +157,44 @@ class ConceptLearner(nn.Module):
         action_logits = slice_action_sequence(actions, x, text_embeddings.shape[1], num_tokens_per_image +1)
 
         return action_logits
+
+
+
+class ConceptLearnerV2(nn.Module):
+    """A multi-modal decoder-only Transformer architecture."""
+
+    config: dict
+
+    # TODO: move parameters to single batch parameter
+    @nn.compact
+    def __call__(self, text, images, train=False):
+        """Forward pass through the model."""
+        # Tokenization + Generate Input Embeddings
+        batch_size = text.shape[0]
+
+        # text embeddings
+        text_tokenizer = BasicTextTokenizer(config=self.config.text_tokenizer)
+        text_embeddings = text_tokenizer(text)
+
+        # image embeddings
+        image_tokenizer = ImageTokenizer(config=self.config.image_tokenizer)
+        image_embeddings = image_tokenizer(images, train=train)
+        batch_size, num_tokens_per_image, _ = image_embeddings.shape
+
+        # combine embeddings
+        x = e.pack((text_embeddings, image_embeddings), 'batch *')
+
+        # pass through self attention layer
+        num_blocks = self.config.transformer.num_blocks
+        # TODO: replace for loop with flax.linen.scan
+        for i in range(num_blocks):
+            x = Encoder1DBlock(self.config.transformer)(
+                x,
+                mask=None,
+                train=train,
+            )
+        
+        # pass through final linear layer
+        action_logits = instantiate(self.config.transformer.output_dense)(x)
+
+        return action_logits
