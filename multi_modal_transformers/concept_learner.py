@@ -89,6 +89,19 @@ def slice_action_sequence(actions, embeddings, num_text_tokens, num_obs_tokens):
     return action_logits
     
 
+class ConceptLearner:
+    """High-level wrapper for ConceptLearnerV1 and ConceptLearnerV2."""
+
+    @classmethod
+    def initialize_from_config(cls, cfg):
+        """Initialize ConceptLearner."""
+        if cfg.version == "v1":
+            return ConceptLearnerV1(cfg)
+        elif cfg.version == "v2":
+            return ConceptLearnerV2(cfg)
+        else:
+            raise NotImplementedError(f"ConceptLearner version {cfg.version} not implemented.")
+            
 
 class ConceptLearnerV1(nn.Module):
     """A multi-modal decoder-only Transformer architecture, inspired by the GATO architecture."""
