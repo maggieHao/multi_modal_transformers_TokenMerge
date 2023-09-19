@@ -6,10 +6,10 @@ from absl.testing import parameterized
 import chex
 
 # multi modal transformer
-from multi_modal_transformer import (
+from multi_modal_transformers.concept_learner import (
         combine_embeddings,
         generate_attention_mask,
-        ConceptLearner,
+        ConceptLearnerV1,
         )
 
 # deep learning framework
