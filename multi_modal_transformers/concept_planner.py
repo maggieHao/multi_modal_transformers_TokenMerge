@@ -114,6 +114,12 @@ class StateValueHead(nn.Module):
     @nn.compact
     def __call__(self, contextual_embeddings):
         """State value."""
+        # flatten embeddings
+        contextual_embeddings = e.rearrange( 
+            contextual_embeddings,
+            "batch tokens features -> batch (tokens features)",
+        )
+
         return instantiate(self.config.transformer.state_value_head)(contextual_embeddings)
 
 
@@ -202,7 +208,7 @@ class ConceptPlanner(nn.Module):
         """Autoregressively generate a sequence of tokens that defines a concept to execute."""
         # initialize text with padding token
         text = jnp.zeros((images.shape[0], 4), dtype=jnp.int32) # replace 4 with max sequence length from config
-        text_log_probs = jnp.zeros((images.shape[0], 1), dtype=jnp.float32) # replace 4 with max sequence length from config
+        text_log_probs = jnp.zeros((images.shape[0]), dtype=jnp.float32) # replace 4 with max sequence length from config
         terminate_mask = jnp.zeros((images.shape[0], 4), dtype=jnp.int32) # replace 4 with max sequence length from config
         
         for idx in range(4): # replace 4 with max sequence length from config:
@@ -234,7 +240,7 @@ class ConceptPlanner(nn.Module):
             next_token_log_prob = jnp.where(terminate_mask[:, idx], 0, next_token_log_prob)
             
             # update text sequence log probability
-            text_log_probs += next_token_log_prob
+            text_log_probs = jnp.add(text_log_probs, next_token_log_prob)
             
             # mask next token with terminate mask
             next_token = jnp.where(terminate_mask[:, idx], 0, next_token)
