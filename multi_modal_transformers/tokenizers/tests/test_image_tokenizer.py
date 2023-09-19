@@ -6,7 +6,7 @@ from absl.testing import parameterized
 import chex
 
 # image tokenizer
-from tokenizers.image_tokenizer import (
+from multi_modal_transformers.tokenizers.image_tokenizer import (
         image_to_patches,
         encode_patch_position,
         )
