@@ -13,7 +13,7 @@ import einops as e
 
 # custom tokenizers
 from multi_modal_transformers.tokenizers.value_tokenizer import ActionTokenizer
-from multi_modal_transformers.tokenizers.image_tokenizer import ImageTokenizer
+from multi_modal_transformers.tokenizers.image_tokenizer import ImageTokenizer, SingleImageTokenizer
 from multi_modal_transformers.tokenizers.text_tokenizer import BasicTextTokenizer
 
 # transformer modules
@@ -90,8 +90,8 @@ def slice_action_sequence(actions, embeddings, num_text_tokens, num_obs_tokens):
     
 
 
-class ConceptLearner(nn.Module):
-    """A multi-modal decoder-only Transformer architecture."""
+class ConceptLearnerV1(nn.Module):
+    """A multi-modal decoder-only Transformer architecture, inspired by the GATO architecture."""
 
     config: dict
 
@@ -161,7 +161,7 @@ class ConceptLearner(nn.Module):
 
 
 class ConceptLearnerV2(nn.Module):
-    """A multi-modal decoder-only Transformer architecture."""
+    """A multi-modal decoder-only Transformer architecture, that uses a single image token."""
 
     config: dict
 
@@ -182,8 +182,8 @@ class ConceptLearnerV2(nn.Module):
         batch_size, num_tokens_per_image, _ = image_embeddings.shape
 
         # combine embeddings
-        x = e.pack((text_embeddings, image_embeddings), 'batch *')
-
+        x, _ = e.pack((text_embeddings, image_embeddings), 'batch * embed')
+        
         # pass through self attention layer
         num_blocks = self.config.transformer.num_blocks
         # TODO: replace for loop with flax.linen.scan
@@ -194,6 +194,8 @@ class ConceptLearnerV2(nn.Module):
                 train=train,
             )
         
+        # flatten embeddings
+        x = e.rearrange(x, 'batch seq embed -> batch (seq embed)')
         # pass through final linear layer
         action_logits = instantiate(self.config.transformer.output_dense)(x)
 
