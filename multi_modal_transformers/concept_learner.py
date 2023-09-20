@@ -213,3 +213,52 @@ class ConceptLearnerV2(nn.Module):
         action_logits = instantiate(self.config.transformer.output_dense)(x)
 
         return action_logits
+
+
+    # implement method to compute attention map
+    def compute_attention_map(self, text, images, train=False, layer=0):
+        """Compute attention map for a layer."""
+        # Tokenization + Generate Input Embeddings
+        batch_size = text.shape[0]
+
+        # text embeddings
+        text_tokenizer = BasicTextTokenizer(config=self.config.text_tokenizer)
+        text_embeddings = text_tokenizer(text)
+
+        # image embeddings
+        image_tokenizer = SingleImageTokenizer(config=self.config.image_tokenizer)
+        image_embeddings = image_tokenizer(images, train=train)
+        batch_size, num_tokens_per_image, _ = image_embeddings.shape
+
+        # combine embeddings
+        x, _ = e.pack((text_embeddings, image_embeddings), 'batch * embed')
+
+        # pass through self attention layer
+        num_blocks = self.config.transformer.num_blocks
+        # TODO: replace for loop with flax.linen.scan
+        for i in range(layer+1):
+            x = Encoder1DBlock(self.config.transformer)(
+                x,
+                mask=None,
+                train=train,
+            )
+
+            if i == layer:
+                attention_block = Encoder1DBlock(self.config.transformer)
+                QW = Encoder1DBlock.SelfAttention.query_kernel
+                KW = Encoder1DBlock.SelfAttention.key_kernel
+
+                # compute attention weights
+                attn_weights = jnp.einsum('...qhd,...khd->...hqk', QW[0], KW[0])
+                
+                # take average across keys
+                attn_weights = jnp.mean(attn_weights, axis=-1)
+
+                # take the average across heads
+                attn_weights = jnp.mean(attn_weights, axis=-1)
+
+                # normalize
+                attn_weights = attn_weights / jnp.sum(attn_weights, axis=-1, keepdims=True)
+
+        return attn_weights
+
