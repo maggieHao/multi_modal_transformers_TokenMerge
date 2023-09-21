@@ -173,6 +173,7 @@ class ConceptLearnerV1(nn.Module):
 
 
 
+# TODO: refactor to support compute_attention_map method
 class ConceptLearnerV2(nn.Module):
     """A multi-modal decoder-only Transformer architecture, that uses a single image token."""
 
@@ -261,4 +262,51 @@ class ConceptLearnerV2(nn.Module):
                 attn_weights = attn_weights / jnp.sum(attn_weights, axis=-1, keepdims=True)
 
         return attn_weights
+
+
+class ConceptLearnerMetaLoss(nn.Module):
+    """A multi-modal decoder-only Transformer architecture, that uses a single image token."""
+
+    config: dict
+
+    @nn.compact
+    def __call__(self, text, images, actions, train=False):
+        # Tokenization + Generate Input Embeddings
+        batch_size = text.shape[0]
+
+        # text embeddings
+        text_tokenizer = BasicTextTokenizer(config=self.config.text_tokenizer)
+        text_embeddings = text_tokenizer(text)
+
+        # image embeddings
+        image_tokenizer = SingleImageTokenizer(config=self.config.image_tokenizer)
+        image_embeddings = image_tokenizer(images, train=train)
+        batch_size, num_tokens_per_image, _ = image_embeddings.shape
+
+        # action embeddings
+        action_tokenizer = ActionTokenizer(config=self.config.action_tokenizer)
+        action_embeddings = action_tokenizer(actions)
+        # add a dimension for the action token
+        action_embeddings = jnp.expand_dims(action_embeddings, axis=1)
+
+         # combine embeddings
+        x, _ = e.pack((text_embeddings, image_embeddings, action_embeddings), 'batch * embed')
+        
+        # pass through self attention layer
+        num_blocks = self.config.transformer.num_blocks
+        # TODO: replace for loop with flax.linen.scan
+        for i in range(num_blocks):
+            x = Encoder1DBlock(self.config.transformer)(
+                x,
+                mask=None,
+                train=train,
+            )
+        
+        # flatten embeddings
+        x = e.rearrange(x, 'batch seq embed -> batch (seq embed)')
+
+        # pass through final linear layer
+        action_logits = instantiate(self.config.transformer.output_dense)(x)
+
+        return action_logits
 
