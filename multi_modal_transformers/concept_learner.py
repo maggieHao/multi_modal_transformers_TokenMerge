@@ -306,7 +306,7 @@ class ConceptLearnerMetaLoss(nn.Module):
         x = e.rearrange(x, 'batch seq embed -> batch (seq embed)')
 
         # pass through final linear layer
-        action_logits = instantiate(self.config.transformer.output_dense)(x)
+        loss = instantiate(self.config.transformer.output_dense)(x)
 
-        return action_logits
+        return jnp.abs(loss)
 

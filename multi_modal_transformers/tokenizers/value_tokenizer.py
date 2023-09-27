@@ -26,12 +26,9 @@ class ActionTokenizer(nn.Module):
         self.embedding = instantiate(self.config["action_embedding"])
 
     def __call__(self, action):
+        """Tokenize discrete actions."""
         return self.embedding(action)
 
-
-############################
-# Continuous Embedding
-############################
 
 def mu_law_encoder(x, mu=255):
     return jnp.sign(x) * jnp.log(1 + mu * jnp.abs(x)) / jnp.log(1 + mu)
