@@ -26,7 +26,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "3.10.6"
-jaxlib = {extras=["cuda12_pip"], url = "https://storage.googleapis.com/jax-releases/cuda12/jaxlib-0.4.13+cuda12.cudnn89-cp310-cp310-manylinux2014_x86_64.whl"}
+jaxlib = {extras=["cuda12_pip"], url = "https://storage.googleapis.com/jax-releases/cuda12/jaxlib-0.4.16+cuda12.cudnn89-cp310-cp310-manylinux2014_x86_64.whl"}
 absl-py = "1.4.0"
 fire = "0.4.0"
 matplotlib = "3.5.0"
