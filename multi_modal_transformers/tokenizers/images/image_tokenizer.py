@@ -18,6 +18,8 @@ from jax import random
 
 
 from hydra.utils import call, instantiate
+# OmegeConf
+from omegaconf import OmegaConf, DictConfig
 
 # import custom utils for logging
 #from utils.logger import get_logger
@@ -138,30 +140,39 @@ class ResNetV2Block(nn.Module):
     """
     Note: fixing parameter defaults to match Gato.
     """
-    config: dict
+    num_blocks: int
+    # input projection layer
+    input_conv: DictConfig
+    input_pool: DictConfig
+    # resnet blocks
+    resnet_norm: DictConfig
+    resnet_activation: DictConfig
+    resnet_conv: DictConfig
+    # output_layer
+    output_dense: DictConfig
 
     @nn.compact
     def __call__(self, x):
         # start with convolution projection
-        x = instantiate(self.config.input_projection.conv)(x)
-        x = call(self.config.input_projection.pool)(x)
+        x = instantiate(self.input_conv)(x)
+        x = call(self.input_pool)(x)
 
         # resnetv2block
         residual = x
         
-        for _ in range(self.config.num_blocks):
-            x = instantiate(self.config.resnet_block.norm)(x)
-            x = call(self.config.resnet_block.activation)(x)
-            x = instantiate(self.config.resnet_block.conv)(x)
+        for _ in range(self.num_blocks):
+            x = instantiate(self.resnet_norm)(x)
+            x = call(self.resnet_activation)(x)
+            x = instantiate(self.resnet_conv)(x)
 
         if residual.shape != x.shape:
-            residual = instantiate(self.config.resnet_block.conv)(residual)
+            residual = instantiate(self.resnet_conv)(residual)
   
         x = x+residual
         
         #flatten output
         x = jnp.reshape(x, (*x.shape[:3], -1))
-        x = instantiate(self.config.output_projection.dense)(x)
+        x = instantiate(self.output_dense)(x)
 
         return x
 
@@ -169,7 +180,7 @@ class ResNetV2Block_(nn.Module):
     """
     Note: fixing parameter defaults to match Gato.
     """
-    config: dict
+    config: DictConfig
 
     @nn.compact
     def __call__(self, x):
@@ -205,19 +216,22 @@ class ImageTokenizer(nn.Module):
     """
     Converts images into tokens.
     """
+    image_size: list
+    patch_size: int
+    normalize: bool 
+    position_interval: int
+    rng_collection: str
+    embedding_dim: int
+    # position embeddings
+    row_position_embedding: DictConfig
+    col_position_embedding: DictConfig
+    # resnet block
+    resnet: DictConfig
 
-    config: dict
-    
-    # TODO: move to @nn.compact
     def setup(self):
-        self.image_size = self.config["image_size"]
-        self.patch_size = self.config["patch_size"]
-        self.position_interval = self.config["position_interval"]
-        self.normalize = self.config["normalize"]
-        self.embedding_function = ResNetV2Block(config=self.config["resnet"]) # consider refactoring to use instantiate
-        self.row_embeddings = instantiate(self.config["row_position_embedding"])
-        self.col_embeddings = instantiate(self.config["col_position_embedding"])
-        self.rng_collection = self.config["rng_collection"]
+        self.embedding_function = instantiate(resnet)
+        self.row_embeddings = instantiate(row_position_embedding)
+        self.col_embeddings = instantiate(col_position_embedding)
 
     def __call__(self, image, train=True):
         """
