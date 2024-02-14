@@ -1,0 +1,7 @@
+version: v2
+token_embedding_dim: 258
+
+defaults:
+  - text_tokenizer: default
+  - image_tokenizer: gato_resnet
+  - attention_blocks: vanilla_decoder

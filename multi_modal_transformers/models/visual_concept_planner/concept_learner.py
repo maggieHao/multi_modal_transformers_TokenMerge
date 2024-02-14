@@ -12,14 +12,14 @@ from flax.linen import initializers
 import einops as e
 
 # custom tokenizers
-from multi_modal_transformers.tokenizers.value_tokenizer import ActionTokenizer
-from multi_modal_transformers.tokenizers.image_tokenizer import ImageTokenizer, SingleImageTokenizer
-from multi_modal_transformers.tokenizers.text_tokenizer import BasicTextTokenizer
+from multi_modal_transformers.tokenizers.numeric_values.value_tokenizer import ActionTokenizer
+from multi_modal_transformers.tokenizers.images.image_tokenizer import ImageTokenizer, SingleImageTokenizer
+from multi_modal_transformers.tokenizers.text.text_tokenizer import BasicTextTokenizer
 
-# transformer modules
-from multi_modal_transformers.transformer_components import Encoder1DBlock
+# attention blocks
+from multi_modal_transformers.attention_blocks.attention import Encoder1DBlock
 
-
+# model config
 from hydra.utils import instantiate
 
 def combine_embeddings(
@@ -310,3 +310,6 @@ class ConceptLearnerMetaLoss(nn.Module):
 
         return jnp.abs(loss)
 
+
+if __name__ == "__main__":
+    # here we verify models through performing one forward pass
