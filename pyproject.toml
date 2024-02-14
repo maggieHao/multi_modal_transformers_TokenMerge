@@ -26,18 +26,16 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "3.10.6"
-jaxlib = {extras=["cuda12_pip"], url = "https://storage.googleapis.com/jax-releases/cuda12/jaxlib-0.4.16+cuda12.cudnn89-cp310-cp310-manylinux2014_x86_64.whl"}
+jaxlib = {extras=["cuda12_pip"], url = "https://storage.googleapis.com/jax-releases/cuda12/jaxlib-0.4.23+cuda12.cudnn89-cp310-cp310-manylinux2014_x86_64.whl"}
 absl-py = "1.4.0"
 fire = "0.4.0"
-matplotlib = "3.5.0"
+matplotlib = "^3.7.0"
 numpy = "1.*"
 pyyaml = "6.0"
 pre-commit = "3.0.2"
-optax = "0.1.7"
-einops = "0.6.0"
-flax = "0.7.1"
-tensorflow-cpu = "2.13.0"
-tensorflow-datasets = "4.9.2"
+optax = "^0.1.7"
+einops = "^0.7.0"
+flax = "^0.7.5"
 protobuf = "4.23.*"
 orbax-checkpoint = "^0.3.0"
 orbax-export = "^0.0.2"
