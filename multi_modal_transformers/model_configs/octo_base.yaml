@@ -4,5 +4,5 @@ param_dtype: float32
 defaults:
   - tokenizers/text: t5_base
   - tokenizers/images: gato_resnet
-  - attention_blocks:
+  - attention_blocks: vanilla_decoder
 

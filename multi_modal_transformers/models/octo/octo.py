@@ -32,19 +32,34 @@ from omegaconf import OmegaConf
 from omegaconf import DictConfig
 
 
-
 # model definition
 class Octo(nn.Module):
     config: DictConfig
-
-    def setup(self):
-        self.text_encoder = instantiate(OCTO_CONFIG.tokenizers.text.encoder)
-        self.image_encoder = instantiate(OCTO_CONFIG.tokenizers.images.encoder, _recursive_=False)
-
+        
+    @nn.compact
     def __call__(self, text_tokens, images):
-        text_embeddings = self.text_encoder(text_tokens)
-        image_embeddings = self.image_encoder(images)
-        return text_embeddings, image_embeddings
+        text_encoder = instantiate(self.config.tokenizers.text.encoder)
+        text_embeddings = text_encoder(text_tokens)
+        
+        image_encoder = instantiate(self.config.tokenizers.images.encoder, _recursive_=False)
+        image_embeddings = image_encoder(images)
+        
+        # concatenate text and observation embeddings
+        embeddings, ps = e.pack((text_embeddings, image_embeddings), 'batch * embed')
+        
+        # create attention mask
+
+        #instantiate(self.config.attention_blocks.encoder_1d_block, _recursive_=False) # test if this works
+
+        # apply attention
+        for _ in range(self.config.attention_blocks.num_blocks):
+            embeddings = instantiate(self.config.attention_blocks.encoder_1d_block, _recursive_=False)(
+                    embeddings,
+                    mask=None,
+                    train=True,
+                    )
+
+        return embeddings
 
 
 if __name__=="__main__":
@@ -68,7 +83,7 @@ if __name__=="__main__":
 
     # instantiate model
     model = Octo(OCTO_CONFIG)
-    variables = model.init({"params": keys[0], "patch_encoding": keys[1]}, text_tokens, images)
+    variables = model.init({"params": keys[0], "patch_encoding": keys[1], "dropout": keys[1]}, text_tokens, images)
     
     # apply forward pass
     outputs = model.apply(
@@ -77,7 +92,10 @@ if __name__=="__main__":
             }, 
             text_tokens, 
             images,
-            rngs={"patch_encoding": keys[2]}
+            rngs={
+                "dropout": keys[2],
+                "patch_encoding": keys[2]
+                }
             )
 
     # check the ouputs
