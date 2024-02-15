@@ -44,8 +44,8 @@ encoder:
     input_conv:
       _target_: flax.linen.Conv
       features: 64
-      kernel_size: [12,12]
-      strides: [2,2]
+      kernel_size: [12, 12]
+      strides: [2, 2]
       padding: VALID
       use_bias: True
       dtype: ${dtype}

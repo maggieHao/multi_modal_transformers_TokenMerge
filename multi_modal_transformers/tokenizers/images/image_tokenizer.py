@@ -2,6 +2,7 @@
 Image tokenizer implementation that aligns with Gato paper.
 """
 import sys
+from typing import Any, Callable, Sequence, Tuple, List
 
 import dataclasses
 import warnings
@@ -216,22 +217,20 @@ class ImageTokenizer(nn.Module):
     """
     Converts images into tokens.
     """
-    image_size: list
+    image_size: List[int]
     patch_size: int
     normalize: bool 
     position_interval: int
     rng_collection: str
     embedding_dim: int
-    # position embeddings
     row_position_embedding: DictConfig
     col_position_embedding: DictConfig
-    # resnet block
     resnet: DictConfig
 
     def setup(self):
-        self.embedding_function = instantiate(resnet)
-        self.row_embeddings = instantiate(row_position_embedding)
-        self.col_embeddings = instantiate(col_position_embedding)
+        self.embedding_function = instantiate(self.resnet, _recursive_=False)
+        self.row_embeddings = instantiate(self.row_position_embedding, _recursive_=True)
+        self.col_embeddings = instantiate(self.col_position_embedding, _recursive_=True)
 
     def __call__(self, image, train=True):
         """
