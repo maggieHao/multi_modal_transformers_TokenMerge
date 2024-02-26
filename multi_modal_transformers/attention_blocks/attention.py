@@ -44,8 +44,8 @@ class Encoder1DBlock(nn.Module):
     """
 
     layer_norm: DictConfig 
-    self_attention: DictConfig
     dropout: DictConfig
+    self_attention: DictConfig
     mlp_block: DictConfig
 
     @nn.compact
