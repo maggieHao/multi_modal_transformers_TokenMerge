@@ -38,18 +38,26 @@ class Octo(nn.Module):
         
     @nn.compact
     def __call__(self, text_tokens, images):
+        # perform tokenization and assign modalities
         text_encoder = instantiate(self.config.tokenizers.text.encoder)
         text_embeddings = text_encoder(text_tokens)
-        
+        # text_embeddings = TextArray()
+
         image_encoder = instantiate(self.config.tokenizers.images.encoder, _recursive_=False)
         image_embeddings = image_encoder(images)
+        # image_embeddings = ImageArray()
         
-        # concatenate text and observation embeddings
+
+        #embedding_sequence_repr = f"Text->{} [Image->{} TextFeedback->{}]*2"
+        #sequence = TokenSequence(embedding_sequence_repr)
+        #embeddings = sequence.assemble_embeddings()
+        #attention_mask = sequence.generate_attention_mask()
+        
+        # assemble sequence of embeddings from token embeddings
         embeddings, ps = e.pack((text_embeddings, image_embeddings), 'batch * embed')
         
         # create attention mask
-
-        #instantiate(self.config.attention_blocks.encoder_1d_block, _recursive_=False) # test if this works
+        # TODO: implement attention mask        
 
         # apply attention
         for _ in range(self.config.attention_blocks.num_blocks):
@@ -78,6 +86,7 @@ if __name__=="__main__":
             ]
     tokenizer = AutoTokenizer.from_pretrained('t5-base')
     inputs = tokenizer(instructions, return_tensors="jax", padding=True, truncation=True)
+    print(inputs)
     text_tokens = inputs["input_ids"]
     images = jnp.ones((2, 3, 280, 280, 3))
 
