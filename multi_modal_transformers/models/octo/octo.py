@@ -15,8 +15,18 @@ import einops as e
 # huggingface transformers
 from transformers import AutoTokenizer
 
+import multi_modal_transformers
+
 # custom tokenizers
-from multi_modal_transformers.tokenizers.token_sequencer import TokenSequence
+from multi_modal_transformers.tokenizers.token_sequencer import (
+        TokenSequence, 
+        TokenEmbeddings,
+        TaskDescriptionPrefix,
+        Text,
+        Image,
+        Readout,
+        )
+
 from multi_modal_transformers.tokenizers.readout.readout import AddPositionEmbedding
 from multi_modal_transformers.tokenizers.numeric_values.value_tokenizer import ActionTokenizer
 from multi_modal_transformers.tokenizers.images.image_tokenizer import ImageTokenizer, SingleImageTokenizer
@@ -43,27 +53,31 @@ class Octo(nn.Module):
         # embed text input
         text_encoder = instantiate(self.config.tokenizers.text.encoder)
         text_embeddings = text_encoder(text_tokens)
-        # text_embeddings = TextArray()
 
         # embed images
         image_encoder = instantiate(self.config.tokenizers.images.encoder, _recursive_=False)
         image_embeddings = image_encoder(images)
-        # image_embeddings = ImageArray()
-        
-        # create param for readout
+        image_embeddings = e.rearrange(image_embeddings, "batch history patch embedding -> batch (history patch) embedding")
+
+        # embed readout
         readout_dummy = jnp.zeros((
+            text_embeddings.shape[0], # batch dimension
             self.config.num_observation_blocks * self.config.tokens_per_readout,
             self.config.token_embedding_dim
-            )) # used to infer shape of position encodings
-        readout_encoder = instantiate(self.config.tokenizers.readouts.encoder, _recursive_=False)
+            ))
+        readout_encoder = instantiate(self.config.tokenizers.readouts.encoder, _recursive_=True)
         readout_embeddings = readout_encoder(readout_dummy)
-        # readout_embeddings = ReadoutArray()
+        
 
         # assemble sequence
+        embeddings = TokenEmbeddings(
+                images = image_embeddings,
+                text = text_embeddings,
+                readouts = readout_embeddings,
+                )
         sequence = TokenSequence(self.config.input_sequence) # TODO: move to instantiate
-        embeddings = sequence.assemble_embeddings([text_embeddings, image_embeddings, readout_embeddings])
-        attention_mask = sequence.generate_attention_mask()
-    
+        attention_mask = sequence.generate_attention_mask() # generates generic attention mask
+        embeddings = sequence.assemble_embeddings(embeddings)
 
         # apply transformer attention
         for _ in range(self.config.attention_blocks.num_blocks):
@@ -90,11 +104,17 @@ if __name__=="__main__":
             "Pick up the red block and put it on the green block",
             "Pick up the green block and put it on the red block",
             ]
-    tokenizer = AutoTokenizer.from_pretrained('t5-base')
-    inputs = tokenizer(instructions, return_tensors="jax", padding=True, truncation=True)
-    print(inputs)
+    tokenizer = AutoTokenizer.from_pretrained('t5-base', model_max_length=16)
+    inputs = tokenizer(
+            instructions, 
+            return_tensors="jax", 
+            max_length=16, # hardcode while debugging
+            padding="max_length", 
+            truncation=True,
+            )
     text_tokens = inputs["input_ids"]
-    images = jnp.ones((2, 3, 280, 280, 3))
+    print(text_tokens.shape)
+    images = jnp.ones((2, 2, 280, 280, 3))
 
     # instantiate model
     model = Octo(OCTO_CONFIG)

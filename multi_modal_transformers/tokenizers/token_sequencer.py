@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import flax
 import flax.linen as nn
 
+import multi_modal_transformers
 
 class TokenSet(abc.ABC):
   """
@@ -54,7 +55,8 @@ class Text(TokenSet):
 
   def __init__(self, num_tokens, timestep):
     super().__init__(num_tokens, timestep)
- 
+    self.modality = "text"
+
   def inter_attention_rule(self, tokenset):
     """
     Text tokens attend causally to all past inputs by default.
@@ -112,8 +114,9 @@ class Image(TokenSet):
   A token set for image observation.
   """
   def __init__(self, num_tokens, timestep):
-    super.__init__(num_tokens, timestep)
-  
+    super().__init__(num_tokens, timestep)
+    self.modality = "images"
+
   def inter_attention_rule(self, tokenset):
     """
     Image tokens attend causally to all past inputs by default.
@@ -146,13 +149,14 @@ class Readout(TokenSet):
   A token set for readout tokens.
   """
   def __init__(self, num_tokens, timestep):
-    super.__init__(num_tokens, timestep)
+    super().__init__(num_tokens, timestep)
+    self.modality = "readouts"
 
   def inter_attention_rule(self, tokenset):
     """
     Readout attends to all past tokens except other readout tokens.
     """
-    if isinstance(self, tokenset): # do not attend to readout tokens
+    if isinstance(tokenset, self.__class__): # do not attend to readout tokens
         return jnp.zeros((self.num_tokens, tokenset.num_tokens))
     elif tokenset.timestep <= self.timestep: # attend causally to previous tokens
       return jnp.ones((self.num_tokens, tokenset.num_tokens))
@@ -183,6 +187,7 @@ class TokenSequence:
   def __init__(self, token_sequence: str):
     self.token_sequence_str = token_sequence
     self.token_sequence = self._parse()
+    self.assemble_embeddings = jax.vmap(self._assemble_embeddings)
 
   def _parse(self):
     """
@@ -215,28 +220,32 @@ class TokenSequence:
         for token_group in token_groups:
           token_group_name = re.search(r'^(.*?)\{', token_group).group(1)
           num_tokens = int(re.search(r'\d+', token_group).group())
-          sequence.append(globals()[token_group_name](num_tokens, timestep))
-          #sequence.append(getattr(module_name, token_group_name)(num_tokens, timestep)
+          sequence.append(getattr(multi_modal_transformers.tokenizers.token_sequencer, token_group_name)(num_tokens, timestep))
     
     return sequence
 
-  def assemble_embeddings(self, embeddings: List[TokenSet]):
+  def _assemble_embeddings(self, embeddings):
     """
     This method accepts embeddings and assembles them into the TokenSequence
     based on the Token representation
     """
+    # maintain indices for each modality
+    modality_idx = {
+            "images": 0,
+            "text": 0,
+            "readouts": 0,
+            }
+
+    embedding_dim = embeddings.text.shape[-1]
     embedding_seq = []  
     for token_group in self.token_sequence:
-      for embedding_idx, embedding in enumerate(embeddings):
-        if isinstance(token_group, embedding.__embedding_type__()):
-          embedding_seq.append(jax.lax.dynamic_slice(
-              embedding.embeddings, 
-              jnp.zeros(2, dtype=int),
-              jnp.array([int(token_group.num_tokens), embedding.embeddings.shape[-1]])))
-          embeddings[embedding_idx].embeddings = jax.lax.dynamic_slice(
-                                                  embedding.embeddings, 
-                                                  jnp.array([int(token_group.num_tokens), 0]),
-                                                  jnp.array([embedding.embeddings.shape[0] - int(token_group.num_tokens), embedding.embeddings.shape[1]]))
+      start_idx = modality_idx[token_group.modality] 
+      embedding_seq.append(jax.lax.dynamic_slice(
+          getattr(embeddings, token_group.modality),
+          jnp.array([start_idx, 0]),
+          jnp.array([token_group.num_tokens, embedding_dim])
+          ))
+      modality_idx[token_group.modality] = start_idx + token_group.num_tokens
 
     return jnp.concatenate(embedding_seq)
 
@@ -255,15 +264,14 @@ class TokenSequence:
   @abc.abstractmethod
   def apply_merging(self):
     raise NotImplemented
+    
 
+@flax.struct.dataclass
 class TokenEmbeddings:
-
-  def __init__(self, embeddings: jax.typing.ArrayLike, embedding_type: TokenSet):
-    self.embeddings = embeddings
-    self.embedding_type = embedding_type
-
-  def __embedding_type__(self):
-    return self.embedding_type
+    text: jax.Array = jnp.array([])
+    images: jax.Array = jnp.array([])
+    readouts: jax.Array = jnp.array([])
+    
 
 if __name__=="__main__":
     # basic tests of token set
