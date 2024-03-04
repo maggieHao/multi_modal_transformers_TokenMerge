@@ -16,6 +16,8 @@ import einops as e
 from transformers import AutoTokenizer
 
 # custom tokenizers
+from multi_modal_transformers.tokenizers.token_sequencer import TokenSequence
+from multi_modal_transformers.tokenizers.readout.readout import AddPositionEmbedding
 from multi_modal_transformers.tokenizers.numeric_values.value_tokenizer import ActionTokenizer
 from multi_modal_transformers.tokenizers.images.image_tokenizer import ImageTokenizer, SingleImageTokenizer
 from multi_modal_transformers.tokenizers.text.text_tokenizer import BasicTextTokenizer
@@ -38,32 +40,36 @@ class Octo(nn.Module):
         
     @nn.compact
     def __call__(self, text_tokens, images):
-        # perform tokenization and assign modalities
+        # embed text input
         text_encoder = instantiate(self.config.tokenizers.text.encoder)
         text_embeddings = text_encoder(text_tokens)
         # text_embeddings = TextArray()
 
+        # embed images
         image_encoder = instantiate(self.config.tokenizers.images.encoder, _recursive_=False)
         image_embeddings = image_encoder(images)
         # image_embeddings = ImageArray()
         
+        # create param for readout
+        readout_dummy = jnp.zeros((
+            self.config.num_observation_blocks * self.config.tokens_per_readout,
+            self.config.token_embedding_dim
+            )) # used to infer shape of position encodings
+        readout_encoder = instantiate(self.config.tokenizers.readouts.encoder, _recursive_=False)
+        readout_embeddings = readout_encoder(readout_dummy)
+        # readout_embeddings = ReadoutArray()
 
-        #embedding_sequence_repr = f"Text->{} [Image->{} TextFeedback->{}]*2"
-        #sequence = TokenSequence(embedding_sequence_repr)
-        #embeddings = sequence.assemble_embeddings()
-        #attention_mask = sequence.generate_attention_mask()
-        
-        # assemble sequence of embeddings from token embeddings
-        embeddings, ps = e.pack((text_embeddings, image_embeddings), 'batch * embed')
-        
-        # create attention mask
-        # TODO: implement attention mask        
+        # assemble sequence
+        sequence = TokenSequence(self.config.input_sequence) # TODO: move to instantiate
+        embeddings = sequence.assemble_embeddings([text_embeddings, image_embeddings, readout_embeddings])
+        attention_mask = sequence.generate_attention_mask()
+    
 
-        # apply attention
+        # apply transformer attention
         for _ in range(self.config.attention_blocks.num_blocks):
             embeddings = instantiate(self.config.attention_blocks.encoder_1d_block, _recursive_=False)(
                     embeddings,
-                    mask=None,
+                    mask=attention_mask,
                     train=True,
                     )
 

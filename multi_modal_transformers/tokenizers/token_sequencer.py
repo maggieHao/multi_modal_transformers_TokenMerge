@@ -1,3 +1,7 @@
+"""
+Block attention implementation inspired by OCTO model.
+"""
+
 import abc
 import re
 from typing import List, Tuple
@@ -7,11 +11,6 @@ import jax.numpy as jnp
 import flax
 import flax.linen as nn
 
-# Idea: wish to dynamically generate attention masks based on token class
-# assignment and specific rules
-
-# tokens are often bunched into sets of a given class start through creating a
-# class that enapsulates a given set type
 
 class TokenSet(abc.ABC):
   """
@@ -48,7 +47,6 @@ class TokenSet(abc.ABC):
     raise NotImplemented
 
 
-# definitions of token sets
 class Text(TokenSet):
   """
   A prefix token set for text descriptions.
@@ -61,7 +59,9 @@ class Text(TokenSet):
     """
     Text tokens attend causally to all past inputs by default.
     """
-    if tokenset.timestep < self.timestep:
+    if isinstance(self, Readout): # do not attend to readout tokens
+        return jnp.zeros((self.num_tokens, tokenset.num_tokens))
+    elif tokenset.timestep <= self.timestep:
       return jnp.ones((self.num_tokens, tokenset.num_tokens))
     else:
       return jnp.zeros((self.num_tokens, tokenset.num_tokens))
@@ -83,6 +83,7 @@ class Text(TokenSet):
       else:
         mask.append(self.inter_attention_rule(tokenset))
     return jnp.hstack(mask)
+
 
 class TaskDescriptionPrefix(Text):
   """
@@ -112,9 +113,66 @@ class Image(TokenSet):
   """
   def __init__(self, num_tokens, timestep):
     super.__init__(num_tokens, timestep)
+  
+  def inter_attention_rule(self, tokenset):
+    """
+    Image tokens attend causally to all past inputs by default.
+    """
+    if isinstance(self, Readout): # do not attend to readout tokens
+        return jnp.zeros((self.num_tokens, tokenset.num_tokens))
+    elif tokenset.timestep <= self.timestep:
+      return jnp.ones((self.num_tokens, tokenset.num_tokens))
+    else:
+      return jnp.zeros((self.num_tokens, tokenset.num_tokens))
+
+  def intra_attention_rule(self)->jax.typing.ArrayLike:
+    """
+    Image patch tokens should attend to eachother. 
+    """
+    return jnp.ones((self.num_tokens, self.num_tokens))
 
   def attention_rule(self, token_sequence=List[TokenSet]):
-    raise NotImplemented
+    mask = []
+    for tokenset in token_sequence:
+      if (tokenset.timestep==self.timestep) and (isinstance(tokenset, self.__class__)):
+        mask.append(self.intra_attention_rule())
+      else:
+        mask.append(self.inter_attention_rule(tokenset))
+    return jnp.hstack(mask)
+
+
+class Readout(TokenSet):
+  """
+  A token set for readout tokens.
+  """
+  def __init__(self, num_tokens, timestep):
+    super.__init__(num_tokens, timestep)
+
+  def inter_attention_rule(self, tokenset):
+    """
+    Readout attends to all past tokens except other readout tokens.
+    """
+    if isinstance(self, tokenset): # do not attend to readout tokens
+        return jnp.zeros((self.num_tokens, tokenset.num_tokens))
+    elif tokenset.timestep <= self.timestep: # attend causally to previous tokens
+      return jnp.ones((self.num_tokens, tokenset.num_tokens))
+    else: 
+      return jnp.zeros((self.num_tokens, tokenset.num_tokens))
+
+  def intra_attention_rule(self)->jax.typing.ArrayLike:
+    """
+    Readout tokens attend to themselves. 
+    """
+    return jnp.ones((self.num_tokens, self.num_tokens))
+
+  def attention_rule(self, token_sequence=List[TokenSet]):
+    mask = []
+    for tokenset in token_sequence:
+      if (tokenset.timestep==self.timestep) and (isinstance(tokenset, self.__class__)):
+        mask.append(self.intra_attention_rule())
+      else:
+        mask.append(self.inter_attention_rule(tokenset))
+    return jnp.hstack(mask)
 
 
 class TokenSequence:
@@ -207,3 +265,20 @@ class TokenEmbeddings:
   def __embedding_type__(self):
     return self.embedding_type
 
+if __name__=="__main__":
+    # basic tests of token set
+    num_tokens = 4
+    timestep = 0
+    text_token_1 = Text(num_tokens, timestep)
+    print(text_token_1.attention_rule([text_token_1, text_token_2]))
+
+
+    # basic tests of token sequence
+    multi_modal_seq = "[Text{4}] [Text{4}]"
+    seq = TokenSequence(multi_modal_seq)
+    attention_mask = seq.generate_attention_mask()
+
+    # assemble text embeddings
+    dummy_embeddings = jnp.vstack([jnp.ones(10) * i for i in range(8)])
+    dummy_embeddings = TokenEmbeddings(dummy_embeddings, Text)
+    seq_embeddings = seq.assemble_embeddings([dummy_embeddings])
