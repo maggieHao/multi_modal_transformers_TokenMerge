@@ -10,6 +10,7 @@ import jax
 import jax.numpy as jnp
 import flax
 import flax.linen as nn
+import einops as e
 
 import multi_modal_transformers
 
@@ -250,12 +251,25 @@ class TokenSequence:
     return jnp.concatenate(embedding_seq)
 
 
-  def generate_attention_mask(self):
+  def generate_attention_mask(self, repeats = 1):
     """
     This method generates an attention mask for the given sequence.
     """ 
-    return jnp.vstack([token_group.attention_rule(self.token_sequence) for token_group in self.token_sequence])
-
+    attention_mask = jnp.vstack([token_group.attention_rule(self.token_sequence) for token_group in self.token_sequence])
+    return e.repeat(attention_mask, "q k -> repeats q k", repeats=repeats)
+    
+  def get_modality_idx(self, modality):
+      """
+      Return the indices in the sequence corresponding to tokens of a given modality.
+      """
+      curr_idx = 0
+      idx = []
+      for token_group in self.token_sequence:
+          if token_group.modality==modality:
+              stop_idx = curr_idx + token_group.num_tokens
+              idx.append(jnp.arange(curr_idx, stop_idx))
+          curr_idx += token_group.num_tokens
+      return jnp.ravel(jnp.array(idx))
 
   @abc.abstractmethod
   def applying_pruning(self):

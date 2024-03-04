@@ -50,6 +50,8 @@ class Octo(nn.Module):
         
     @nn.compact
     def __call__(self, text_tokens, images):
+
+        ## Generating Embedding Sequence ##
         # embed text input
         text_encoder = instantiate(self.config.tokenizers.text.encoder)
         text_embeddings = text_encoder(text_tokens)
@@ -68,24 +70,33 @@ class Octo(nn.Module):
         readout_encoder = instantiate(self.config.tokenizers.readouts.encoder, _recursive_=True)
         readout_embeddings = readout_encoder(readout_dummy)
         
-
-        # assemble sequence
+        # assemble embedding sequence for attention layers
         embeddings = TokenEmbeddings(
                 images = image_embeddings,
                 text = text_embeddings,
                 readouts = readout_embeddings,
                 )
-        sequence = TokenSequence(self.config.input_sequence) # TODO: move to instantiate
-        attention_mask = sequence.generate_attention_mask() # generates generic attention mask
+        sequence = TokenSequence(
+                self.config.input_sequence
+                )
+        attention_mask = sequence.generate_attention_mask()
+        #TODO: compute padding mask 
         embeddings = sequence.assemble_embeddings(embeddings)
 
-        # apply transformer attention
+        ## Apply Attention Mechanism ##
         for _ in range(self.config.attention_blocks.num_blocks):
             embeddings = instantiate(self.config.attention_blocks.encoder_1d_block, _recursive_=False)(
                     embeddings,
                     mask=attention_mask,
                     train=True,
                     )
+
+        ## Generate Action Head Predictions ##
+        # filter output embeddings for readout embeddings
+        readout_idx = sequence.get_modality_idx("readouts")     
+
+        # pass readout embeddings to action prediction head
+
 
         return embeddings
 
@@ -113,7 +124,6 @@ if __name__=="__main__":
             truncation=True,
             )
     text_tokens = inputs["input_ids"]
-    print(text_tokens.shape)
     images = jnp.ones((2, 2, 280, 280, 3))
 
     # instantiate model
