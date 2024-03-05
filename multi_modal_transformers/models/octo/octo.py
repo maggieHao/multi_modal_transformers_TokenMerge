@@ -96,7 +96,7 @@ class Octo(nn.Module):
         readout_idx = sequence.get_modality_idx("readouts")     
 
         # pass readout embeddings to action prediction head
-
+        embeddings = instantiate(self.config.action_heads.diffusion_action_head, _recursive_=False)(embeddings)
 
         return embeddings
 
