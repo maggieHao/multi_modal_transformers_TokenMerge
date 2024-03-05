@@ -95,6 +95,10 @@ class Octo(nn.Module):
         # filter output embeddings for readout embeddings
         readout_idx = sequence.get_modality_idx("readouts")     
 
+        # for now create dummy data for diffusion process
+        noisy_action = jnp.zeros()
+        time = jnp.zeros()
+
         # pass readout embeddings to action prediction head
         embeddings = instantiate(self.config.action_heads.diffusion_action_head, _recursive_=False)(embeddings)
 
