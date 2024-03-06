@@ -1,5 +1,8 @@
 diffusion_action_head:
   _target_: multi_modal_transformers.action_heads.diffusion.DiffusionActionHead
+  
+  diffusion_steps: 32
+  rng_collection: "diffusion"
   attention_pooling:
     _target_: multi_modal_transformers.attention_blocks.attention.MultiHeadAttentionPooling
     
@@ -82,7 +85,7 @@ diffusion_action_head:
           bias_init:
             _target_: flax.linen.initializers.normal
     
-    num_blocks: 2
+    num_blocks: 1
     mlp_block:
       _target_: multi_modal_transformers.attention_blocks.attention.MLPBlock
       dense:
@@ -104,7 +107,7 @@ diffusion_action_head:
       
       dense_out:
         _target_: flax.linen.Dense
-        features: 768
+        features: 8
         kernel_init:
           _target_: flax.linen.initializers.he_normal
         use_bias: true

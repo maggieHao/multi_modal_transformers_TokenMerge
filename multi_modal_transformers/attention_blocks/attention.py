@@ -81,7 +81,7 @@ class MultiHeadAttentionPooling(nn.Module):
     query = self.param(
             "learnt_q_input", 
             call(self.query_map_input.kernel_init),
-            (1, sequence_length, embedding_dim), 
+            (1, 1, embedding_dim), 
             )
     query = jnp.tile(query, [batch_size, 1, 1])
 

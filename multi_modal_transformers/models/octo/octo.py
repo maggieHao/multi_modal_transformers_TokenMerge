@@ -47,18 +47,24 @@ from omegaconf import DictConfig
 # model definition
 class Octo(nn.Module):
     config: DictConfig
-        
-    @nn.compact
-    def __call__(self, text_tokens, images):
 
-        ## Generating Embedding Sequence ##
+    def setup(self):
+        self.token_sequence = TokenSequence(self.config.input_sequence)
+        
+        self.text_encoder = instantiate(self.config.tokenizers.text.encoder) 
+        self.image_encoder = instantiate(self.config.tokenizers.images.encoder, _recursive_=False)
+        self.readout_encoder = instantiate(self.config.tokenizers.readouts.encoder, _recursive_=True) 
+        
+        self.attention_blocks = [instantiate(self.config.attention_blocks.encoder_1d_block, _recursive_=False) for _ in range(self.config.attention_blocks.num_blocks)] 
+
+        self.diffusion_action_head = instantiate(self.config.action_heads.diffusion_action_head, _recursive_=False)
+
+    def generate_readouts(self, text_tokens, images):
         # embed text input
-        text_encoder = instantiate(self.config.tokenizers.text.encoder)
-        text_embeddings = text_encoder(text_tokens)
+        text_embeddings = self.text_encoder(text_tokens)
 
         # embed images
-        image_encoder = instantiate(self.config.tokenizers.images.encoder, _recursive_=False)
-        image_embeddings = image_encoder(images)
+        image_embeddings = self.image_encoder(images)
         image_embeddings = e.rearrange(image_embeddings, "batch history patch embedding -> batch (history patch) embedding")
 
         # embed readout
@@ -67,8 +73,7 @@ class Octo(nn.Module):
             self.config.num_observation_blocks * self.config.tokens_per_readout,
             self.config.token_embedding_dim
             ))
-        readout_encoder = instantiate(self.config.tokenizers.readouts.encoder, _recursive_=True)
-        readout_embeddings = readout_encoder(readout_dummy)
+        readout_embeddings = self.readout_encoder(readout_dummy)
         
         # assemble embedding sequence for attention layers
         embeddings = TokenEmbeddings(
@@ -76,33 +81,36 @@ class Octo(nn.Module):
                 text = text_embeddings,
                 readouts = readout_embeddings,
                 )
-        sequence = TokenSequence(
-                self.config.input_sequence
-                )
-        attention_mask = sequence.generate_attention_mask()
+        attention_mask = self.token_sequence.generate_attention_mask()
         #TODO: compute padding mask 
-        embeddings = sequence.assemble_embeddings(embeddings)
-
-        ## Apply Attention Mechanism ##
-        for _ in range(self.config.attention_blocks.num_blocks):
-            embeddings = instantiate(self.config.attention_blocks.encoder_1d_block, _recursive_=False)(
+        embeddings = self.token_sequence.assemble_embeddings(embeddings)
+        
+        # apply attention blocks
+        for block in self.attention_blocks:
+            embeddings = block(
                     embeddings,
                     mask=attention_mask,
                     train=True,
                     )
 
-        ## Generate Action Head Predictions ##
         # filter output embeddings for readout embeddings
-        readout_idx = sequence.get_modality_idx("readouts")     
+        readout_idx = self.token_sequence.get_modality_idx("readouts")     
+        readout_embeddings = jnp.take(embeddings, readout_idx, axis=1)
+        jax.debug.print("Readout Embedding Dim: {}", readout_embeddings.shape)
 
-        # for now create dummy data for diffusion process
-        noisy_action = jnp.zeros()
-        time = jnp.zeros()
+        return readout_embeddings
 
-        # pass readout embeddings to action prediction head
-        embeddings = instantiate(self.config.action_heads.diffusion_action_head, _recursive_=False)(embeddings)
+    def predict_denoise_term(self, text_tokens, images, time, noisy_actions):
+        readout_embeddings = self.generate_readouts(text_tokens, images)
+        denoise_terms = self.diffusion_action_head.predict_denoise_term(readout_embeddings, time, noisy_actions)
+        
+        return denoise_terms
 
-        return embeddings
+    def predict_action(self, text_tokens, images):
+        readout_embeddings = self.generate_readouts(text_tokens, images)
+        action_prediction = self.diffusion_action_head.predict_action(readout_embeddings)
+
+        return action_prediction
 
 
 if __name__=="__main__":
@@ -112,7 +120,7 @@ if __name__=="__main__":
             config_name="octo_base",
             )
     
-    keys = jax.random.split(jax.random.PRNGKey(0), 3)
+    keys = jax.random.split(jax.random.PRNGKey(0), 4)
 
     # test inputs #
     instructions = [
@@ -129,10 +137,23 @@ if __name__=="__main__":
             )
     text_tokens = inputs["input_ids"]
     images = jnp.ones((2, 2, 280, 280, 3))
+    time = jnp.ones((2, 1))
+    noisy_actions = jnp.ones((2, 8))
 
     # instantiate model
     model = Octo(OCTO_CONFIG)
-    variables = model.init({"params": keys[0], "patch_encoding": keys[1], "dropout": keys[1]}, text_tokens, images)
+    variables = model.init(
+            {"params": keys[0], 
+             "patch_encoding": keys[1], 
+             "dropout": keys[2],
+             "diffusion": keys[3],
+             }, 
+            text_tokens, 
+            images,
+            time, 
+            noisy_actions,
+            method="predict_denoise_term",
+            )
     
     # apply forward pass
     outputs = model.apply(
@@ -141,10 +162,12 @@ if __name__=="__main__":
             }, 
             text_tokens, 
             images,
+            method="predict_action",
             rngs={
                 "dropout": keys[2],
-                "patch_encoding": keys[2]
-                }
+                "patch_encoding": keys[2],
+                "diffusion": keys[2],
+                },
             )
 
     # check the ouputs
