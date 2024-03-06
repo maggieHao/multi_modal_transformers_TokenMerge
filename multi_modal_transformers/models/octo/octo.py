@@ -141,7 +141,7 @@ class OCTOMetrics(metrics.Collection):
     denoise_loss: metrics.Average.from_output("loss")
 
 class OCTOTrainState(train_state.TrainState):
-    metrics: Metrics
+    metrics: OCTOMetrics
 
 def create_octo_train_state(
         text, 
@@ -157,16 +157,18 @@ def create_octo_train_state(
         rngs, 
         text,
         images,
+        diffusion_inputs["time"],
+        diffusion_inputs["noisy_actions"],
         method=method 
     )
 
     params = variables["params"]
 
     return OCTOTrainState.create(
-        apply_fn=model.apply(method=method),
+        apply_fn=getattr(model, method),
         params=params,
         tx=optimizer,
-        metrics=Metrics.empty(),
+        metrics=OCTOMetrics.empty(),
     )
 
 if __name__=="__main__":
