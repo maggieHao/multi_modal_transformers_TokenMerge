@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import flax 
 import flax.linen as nn
 from flax.linen import initializers
+import optax as opt
 import einops as e
 
 from omegaconf import DictConfig
@@ -104,11 +105,41 @@ class DiffusionActionHead(nn.Module):
         return denoise_term
 
 
-    def denoise_loss(self):
+    def denoise_loss(
+            self,
+            readouts, 
+            actions, 
+            train=True
+            ):
         """
         Training loss for denoise term prediction.
         """
-        raise NotImplementedError
+        batch_size = actions.shape[0]
+        rng = self.make_rng("diffusion")
+        time_key, noise_key = jax.random.split(rng)
+
+        # sample a random time value
+        time = jax.random.randint(time_key, (batch_size, 1), 0, self.diffusion_steps)
+
+        # generate noisy action
+        noise = jax.random.normal(noise_key, actions.shape)
+        alpha_hat = self.alpha_hats[time]
+        alpha_1 = jnp.sqrt(alpha_hat)
+        alpha_2 = jnp.sqrt(1 - alpha_hat)
+        noisy_action = alpha_1 * actions + alpha_2 * noise
+
+        # predict denoise term
+        predictions = self.predict_denoise_term(
+                readouts, 
+                time, 
+                noisy_action, 
+                )
+
+        # compute mse loss 
+        loss = opt.l2_loss(predictions, noise)
+
+        return loss
+        
     
     def predict_action(
             self,
