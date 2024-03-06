@@ -106,6 +106,11 @@ class Octo(nn.Module):
         
         return denoise_terms
 
+    def compute_denoise_loss(self, text_tokens, images, actions):
+        readout_embeddings = self.generate_readouts(text_tokens, images)
+        loss = self.diffusion_action_head.denoise_loss(readout_embeddings, actions)
+        return loss
+
     def predict_action(self, text_tokens, images):
         readout_embeddings = self.generate_readouts(text_tokens, images)
         action_prediction = self.diffusion_action_head.predict_action(readout_embeddings)
@@ -138,9 +143,10 @@ if __name__=="__main__":
     text_tokens = inputs["input_ids"]
     images = jnp.ones((2, 2, 280, 280, 3))
     time = jnp.ones((2, 1))
+    actions = jnp.ones((2, 8))
     noisy_actions = jnp.ones((2, 8))
 
-    # instantiate model
+    # instantiate model using diffusion noise prediction method
     model = Octo(OCTO_CONFIG)
     variables = model.init(
             {"params": keys[0], 
@@ -155,7 +161,7 @@ if __name__=="__main__":
             method="predict_denoise_term",
             )
     
-    # apply forward pass
+    # test forward pass for action prediction
     outputs = model.apply(
             {
                 "params": variables["params"],
@@ -170,5 +176,21 @@ if __name__=="__main__":
                 },
             )
 
-    # check the ouputs
-    print(outputs)            
+    # test computation of loss value
+    loss = model.apply(
+            {
+                "params": variables["params"],
+            }, 
+            text_tokens, 
+            images,
+            actions,
+            method="compute_denoise_loss",
+            rngs={
+                "dropout": keys[2],
+                "patch_encoding": keys[2],
+                "diffusion": keys[2],
+                },
+            )
+
+    print(loss)
+
