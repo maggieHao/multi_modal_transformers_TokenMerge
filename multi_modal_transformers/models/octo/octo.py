@@ -62,7 +62,6 @@ class Octo(nn.Module):
         
         # attention blocks
         self.attention_blocks = instantiate(self.config.attention_blocks.stacked_encoder_1d_block, _recursive_=False)
-        #[instantiate(self.config.attention_blocks.encoder_1d_block, _recursive_=False) for _ in range(self.config.attention_blocks.num_blocks)] 
 
         # attention heads
         self.diffusion_action_head = instantiate(self.config.action_heads.diffusion_action_head, _recursive_=False)
@@ -145,7 +144,7 @@ def diffusion_train_step(model, train_state, text_tokens, images, actions):
     train_rngs["diffusion"] = jax.random.fold_in(train_state.rngs["diffusion"], train_state.step)
 
     # compute loss and gradient of loss
-    value, grads = jax.value_and_grad(
+    loss, grads = jax.value_and_grad(
             train_state.apply_fn,
             argnums=0)(
                     {"params": train_state.params},
@@ -158,12 +157,19 @@ def diffusion_train_step(model, train_state, text_tokens, images, actions):
 
     # perform gradient descent using computed gradients
     train_state = train_state.apply_gradients(grads=grads["params"])
-    
+   
+    # update metrics
+    metric_updates = train_state.metrics.single_from_model_output(
+            denoise_loss = loss,
+            )
+    metrics = train_state.metrics.merge(metric_updates)
+    train_state = train_state.replace(metrics=metrics)
+
     return train_state
 
 @struct.dataclass
 class OCTOMetrics(metrics.Collection):
-    denoise_loss: metrics.Average.from_output("loss")
+    denoise_loss: metrics.Average.from_output("denoise_loss")
 
 class OCTOTrainState(train_state.TrainState):
     metrics: OCTOMetrics
