@@ -29,7 +29,7 @@ from multi_modal_transformers.tokenizers.token_sequencer import (
 from multi_modal_transformers.tokenizers.readout.readout import AddPositionEmbedding
 from multi_modal_transformers.tokenizers.images.image_tokenizer import ImageTokenizer, SingleImageTokenizer
 from multi_modal_transformers.tokenizers.text.text_tokenizer import BasicTextTokenizer
-from multi_modal_transformers.attention_blocks.attention import Encoder1DBlock
+from multi_modal_transformers.attention_blocks.attention import Encoder1DBlock, StackedEncoder1DBlock
 
 # huggingface transformers
 from transformers import AutoTokenizer
@@ -61,7 +61,8 @@ class Octo(nn.Module):
         self.readout_encoder = instantiate(self.config.tokenizers.readouts.encoder, _recursive_=True) 
         
         # attention blocks
-        self.attention_blocks = [instantiate(self.config.attention_blocks.encoder_1d_block, _recursive_=False) for _ in range(self.config.attention_blocks.num_blocks)] 
+        self.attention_blocks = instantiate(self.config.attention_blocks.stacked_encoder_1d_block, _recursive_=False)
+        #[instantiate(self.config.attention_blocks.encoder_1d_block, _recursive_=False) for _ in range(self.config.attention_blocks.num_blocks)] 
 
         # attention heads
         self.diffusion_action_head = instantiate(self.config.action_heads.diffusion_action_head, _recursive_=False)
@@ -95,12 +96,7 @@ class Octo(nn.Module):
         attention_mask = self.token_sequence.generate_attention_mask()
         
         # apply attention blocks
-        for block in self.attention_blocks:
-            embeddings = block(
-                    embeddings,
-                    mask=attention_mask,
-                    train=True,
-                    )
+        embeddings = self.attention_blocks(embeddings, mask=attention_mask, train=True)
 
         # filter for readout embeddings
         readout_idx = self.token_sequence.get_modality_idx("readouts")     
@@ -137,6 +133,34 @@ class Octo(nn.Module):
 
 ## Model Training State ##
 
+def diffusion_train_step(model, train_state, text_tokens, images, actions):
+    """
+    Performs one step of diffusion process training on a batch of data.
+    """
+    
+    # generate new random keys
+    train_rngs = {}
+    train_rngs["dropout"] = jax.random.fold_in(train_state.rngs["dropout"], train_state.step)
+    train_rngs["patch_encoding"] = jax.random.fold_in(train_state.rngs["patch_encoding"], train_state.step)
+    train_rngs["diffusion"] = jax.random.fold_in(train_state.rngs["diffusion"], train_state.step)
+
+    # compute loss and gradient of loss
+    value, grads = jax.value_and_grad(
+            train_state.apply_fn,
+            argnums=0)(
+                    {"params": train_state.params},
+                    text_tokens, 
+                    images,
+                    actions,
+                    rngs=train_rngs,
+                    method="compute_diffusion_denoise_loss"
+                    )
+
+    # perform gradient descent using computed gradients
+    train_state = train_state.apply_gradients(grads=grads["params"])
+    
+    return train_state
+
 @struct.dataclass
 class OCTOMetrics(metrics.Collection):
     denoise_loss: metrics.Average.from_output("loss")
@@ -144,6 +168,8 @@ class OCTOMetrics(metrics.Collection):
 class OCTOTrainState(train_state.TrainState):
     metrics: OCTOMetrics
     text_tokenize_fn: Callable
+    rngs: dict
+    diffusion_train_step: Callable = diffusion_train_step
 
 def create_octo_train_state(
         text, 
@@ -168,7 +194,7 @@ def create_octo_train_state(
     params = variables["params"]
 
     return OCTOTrainState.create(
-        apply_fn=getattr(model, method),
+        apply_fn=model.apply,
         params=params,
         tx=optimizer,
         metrics=OCTOMetrics.empty(),
@@ -177,7 +203,8 @@ def create_octo_train_state(
                                max_length=16, # hardcode while debugging
                                padding="max_length", 
                                truncation=True
-                               )
+                               ),
+        rngs=rngs,
     )
 
 if __name__=="__main__":

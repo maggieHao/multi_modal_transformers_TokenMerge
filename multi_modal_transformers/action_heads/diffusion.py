@@ -137,7 +137,7 @@ class DiffusionActionHead(nn.Module):
 
         # compute mse loss 
         loss = opt.l2_loss(predictions, noise)
-
+        loss = jnp.mean(jnp.sum(loss, axis=-1))
         return loss
         
     

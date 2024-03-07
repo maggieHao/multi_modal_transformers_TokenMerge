@@ -61,6 +61,18 @@ class Encoder1DBlock(nn.Module):
 
         return x + y
 
+class StackedEncoder1DBlock(nn.Module):
+    """Stacking Transformer encoder layers."""
+
+    num_blocks: int
+    encoder_1d_block: DictConfig
+
+    @nn.compact
+    def __call__(self, x, train=True, mask=None):
+        for _ in range(self.num_blocks):
+            x = instantiate(self.encoder_1d_block, _recursive_=False)(x)
+
+        return x
 
 class MultiHeadAttentionPooling(nn.Module):
   """Multihead Attention Pooling."""
