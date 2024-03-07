@@ -1,8 +1,9 @@
 """
 Octo model architecture.
 """
-from typing import Any
+from typing import Any, Callable
 from dataclasses import dataclass
+from functools import partial
 
 # linear algebra/deep learning frameworks
 import numpy as np
@@ -142,10 +143,12 @@ class OCTOMetrics(metrics.Collection):
 
 class OCTOTrainState(train_state.TrainState):
     metrics: OCTOMetrics
+    text_tokenize_fn: Callable
 
 def create_octo_train_state(
         text, 
-        images, 
+        images,
+        text_tokenizer,
         diffusion_inputs, 
         rngs,
         model, 
@@ -169,6 +172,12 @@ def create_octo_train_state(
         params=params,
         tx=optimizer,
         metrics=OCTOMetrics.empty(),
+        text_tokenize_fn=partial(text_tokenizer, 
+                               return_tensors="jax", 
+                               max_length=16, # hardcode while debugging
+                               padding="max_length", 
+                               truncation=True
+                               )
     )
 
 if __name__=="__main__":
@@ -185,15 +194,14 @@ if __name__=="__main__":
             "Pick up the red block and put it on the green block",
             "Pick up the green block and put it on the red block",
             ]
-    tokenizer = AutoTokenizer.from_pretrained('t5-base', model_max_length=16)
-    inputs = tokenizer(
+    tokenizer = instantiate(OCTO_CONFIG.tokenizers.text.tokenizer)
+    text_tokens = tokenizer(
             instructions, 
             return_tensors="jax", 
             max_length=16, # hardcode while debugging
             padding="max_length", 
             truncation=True,
-            )
-    text_tokens = inputs["input_ids"]
+            )["input_ids"]
     images = jnp.ones((2, 2, 280, 280, 3))
     time = jnp.ones((2, 1))
     actions = jnp.ones((2, 8))
