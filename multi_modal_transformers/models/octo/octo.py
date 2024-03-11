@@ -75,8 +75,8 @@ class Octo(nn.Module):
         """
 
         # create embeddings for each modality
-        text_embeddings = self.text_encoder(text_tokens)
-        
+        text_embeddings = jax.lax.stop_gradient(self.text_encoder(text_tokens))
+
         image_embeddings = self.image_encoder(images)
         image_embeddings = e.rearrange(image_embeddings, "batch history patch embedding -> batch (history patch) embedding")
         

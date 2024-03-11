@@ -13,7 +13,6 @@ class T5Tokenizer(nn.Module):
 
     def __call__(self, input_ids):
         embeddings = self.model(input_ids).last_hidden_state
-        embeddings = jax.lax.stop_gradient(embeddings)
         return embeddings
 
 if __name__ == "__main__":
