@@ -54,7 +54,10 @@ class Octo(nn.Module):
     def setup(self):
         # token sequence manager
         self.token_sequence = TokenSequence(self.config.input_sequence)
-        
+        self.attention_mask = self.token_sequence.generate_attention_mask()
+        self.slice_idx = self.token_sequence.slice_idx
+        self.assemble_embeddings = partial(self.token_sequence.assemble_embeddings, slice_idx=self.slice_idx)
+
         # modality encoders
         self.text_encoder = instantiate(self.config.tokenizers.text.encoder) 
         self.image_encoder = instantiate(self.config.tokenizers.images.encoder, _recursive_=False)
@@ -91,11 +94,10 @@ class Octo(nn.Module):
                 text = text_embeddings,
                 readouts = readout_embeddings,
                 )
-        embeddings = self.token_sequence.assemble_embeddings(embeddings)
-        attention_mask = self.token_sequence.generate_attention_mask()
+        embeddings = self.assemble_embeddings(embeddings)
         
         # apply attention blocks
-        embeddings = self.attention_blocks(embeddings, mask=attention_mask, train=True)
+        embeddings = self.attention_blocks(embeddings, mask=self.attention_mask, train=True)
 
         # filter for readout embeddings
         readout_idx = self.token_sequence.get_modality_idx("readouts")     

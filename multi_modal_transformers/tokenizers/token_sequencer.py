@@ -5,6 +5,7 @@ Block attention implementation inspired by OCTO model.
 import abc
 import re
 from typing import List, Tuple
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -188,7 +189,8 @@ class TokenSequence:
   def __init__(self, token_sequence: str):
     self.token_sequence_str = token_sequence
     self.token_sequence = self._parse()
-    self.assemble_embeddings = jax.vmap(self._assemble_embeddings)
+    self.slice_idx = self._generate_embedding_slices()
+    self.assemble_embeddings = jax.jit(self._assemble_embeddings, static_argnames=["slice_idx"])
 
   def _parse(self):
     """
@@ -224,32 +226,46 @@ class TokenSequence:
           sequence.append(getattr(multi_modal_transformers.tokenizers.token_sequencer, token_group_name)(num_tokens, timestep))
     
     return sequence
-
-  def _assemble_embeddings(self, embeddings):
+    
+  def _assemble_embeddings(self, embeddings, slice_idx):
     """
     This method accepts embeddings and assembles them into the TokenSequence
     based on the Token representation
     """
-    # maintain indices for each modality
+    embedding_seq = []
+    for slice_id, token_group in zip(slice_idx, self.token_sequence):
+      embedding_seq.append(jax.lax.dynamic_slice_in_dim(
+          getattr(embeddings, token_group.modality),
+          slice_id[0],
+          slice_id[1],
+          axis=1
+          ))
+
+    return jnp.concatenate(embedding_seq, axis=1)
+
+
+  def _generate_embedding_slices(self):
+    """
+    Generate dynamic slices for assembling token modalities into a sequence.
+    """
     modality_idx = {
             "images": 0,
             "text": 0,
             "readouts": 0,
-            }
+            } 
+    slice_idx = []
 
-    embedding_dim = embeddings.text.shape[-1]
-    embedding_seq = []  
     for token_group in self.token_sequence:
-      start_idx = modality_idx[token_group.modality] 
-      embedding_seq.append(jax.lax.dynamic_slice(
-          getattr(embeddings, token_group.modality),
-          jnp.array([start_idx, 0]),
-          jnp.array([token_group.num_tokens, embedding_dim])
-          ))
-      modality_idx[token_group.modality] = start_idx + token_group.num_tokens
-
-    return jnp.concatenate(embedding_seq)
-
+        start_idx = modality_idx[token_group.modality]
+        slice_idx.append(
+                tuple([
+                    start_idx, 
+                    token_group.num_tokens
+                    ])
+                )
+        modality_idx[token_group.modality] = start_idx + token_group.num_tokens
+    
+    return iter(slice_idx)
 
   def generate_attention_mask(self, repeats = 1):
     """
