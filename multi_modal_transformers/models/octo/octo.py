@@ -66,8 +66,12 @@ class Octo(nn.Module):
         # attention blocks
         self.attention_blocks = instantiate(self.config.attention_blocks.stacked_encoder_1d_block, _recursive_=False)
 
-        # attention heads
-        self.diffusion_action_head = instantiate(self.config.action_heads.diffusion_action_head, _recursive_=False)
+        # attention heads 
+        if self.config.action_heads.diffusion_action_head is not None:
+            self.diffusion_action_head = instantiate(self.config.action_heads.diffusion_action_head, _recursive_=False)
+        
+        if self.config.action_heads.continuous_action_head is not None:
+            self.continuous_action_head = instantiate(self.config.action_heads.continuous_action_head, _recursive_=False)
 
     def generate_readouts(self, text_tokens, images):
         """
@@ -81,7 +85,7 @@ class Octo(nn.Module):
         image_embeddings = e.rearrange(image_embeddings, "batch history patch embedding -> batch (history patch) embedding")
         
         readout_dummy = jnp.zeros((
-            text_embeddings.shape[0], # batch dimension
+            image_embeddings.shape[0], # batch dimension
             self.config.num_observation_blocks * self.config.tokens_per_readout,
             self.config.token_embedding_dim
             ))
@@ -95,7 +99,8 @@ class Octo(nn.Module):
                 readouts = readout_embeddings,
                 )
         embeddings = self.assemble_embeddings(embeddings)
-        
+
+
         # apply attention blocks
         embeddings = self.attention_blocks(embeddings, mask=self.attention_mask, train=True)
 
@@ -104,7 +109,7 @@ class Octo(nn.Module):
         readout_embeddings = jnp.take(embeddings, readout_idx, axis=1)
 
         return readout_embeddings
-
+        
     def predict_diffusion_denoise_term(self, text_tokens, images, time, noisy_actions):
         """
         Predict denoising term for diffusion process.
@@ -130,6 +135,24 @@ class Octo(nn.Module):
         action_prediction = self.diffusion_action_head.predict_action(readout_embeddings)
 
         return action_prediction
+
+    def predict_continuous_action(self, text_tokens, images):
+        """
+        Predict nex action using continuous action head.
+        """
+        readout_embeddings = self.generate_readouts(text_tokens, images)
+        action_prediction = self.continuous_action_head(readout_embeddings)
+
+        return action_prediction
+
+    def compute_continuous_l2_loss(self, text_tokens, images, actions):
+        """
+        Compute l2 loss for continuous action head.
+        """
+        readout_embeddings = self.generate_readouts(text_tokens, images)
+        loss = self.continuous_action_head.l2_loss(readout_embeddings, actions)
+
+        return jnp.mean(loss, axis=-1)
 
 
 ## Model Training State ##
@@ -169,6 +192,40 @@ def diffusion_train_step(model, train_state, text_tokens, images, actions):
 
     return train_state
 
+def continuous_train_step(model, train_state, text_tokens, images, actions):
+    """
+    Performs one step of diffusion process training on a batch of data.
+    """
+    
+    # generate new random keys
+    train_rngs = {}
+    train_rngs["dropout"] = jax.random.fold_in(train_state.rngs["dropout"], train_state.step)
+    train_rngs["patch_encoding"] = jax.random.fold_in(train_state.rngs["patch_encoding"], train_state.step)
+
+    # compute loss and gradient of loss
+    loss, grads = jax.value_and_grad(
+            train_state.apply_fn,
+            argnums=0)(
+                    {"params": train_state.params},
+                    text_tokens, 
+                    images,
+                    actions,
+                    rngs=train_rngs,
+                    method="compute_continuous_l2_loss"
+                    )
+
+    # perform gradient descent using computed gradients
+    train_state = train_state.apply_gradients(grads=grads["params"])
+   
+    # update metrics
+    metric_updates = train_state.metrics.single_from_model_output(
+            denoise_loss = loss,
+            )
+    metrics = train_state.metrics.merge(metric_updates)
+    train_state = train_state.replace(metrics=metrics)
+
+    return train_state
+
 @struct.dataclass
 class OCTOMetrics(metrics.Collection):
     denoise_loss: metrics.Average.from_output("denoise_loss")
@@ -177,6 +234,7 @@ class OCTOTrainState(train_state.TrainState):
     metrics: OCTOMetrics
     text_tokenize_fn: Callable
     rngs: dict
+    continuous_train_step: Callable = continuous_train_step
     diffusion_train_step: Callable = diffusion_train_step
 
 def create_octo_train_state(
@@ -190,14 +248,25 @@ def create_octo_train_state(
         method="predict_diffusion_denoise_term", # default to diffusion model
         ):
     """Create initial training state."""
-    variables = model.init(
-        rngs, 
-        text,
-        images,
-        diffusion_inputs["time"],
-        diffusion_inputs["noisy_actions"],
-        method=method 
-    )
+    
+    if method=="predict_diffusion_denoise_term":
+        variables = model.init(
+            rngs, 
+            text,
+            images,
+            diffusion_inputs["time"],
+            diffusion_inputs["noisy_actions"],
+            method=method 
+        )
+    elif method=="predict_continuous_action":
+        variables = model.init(
+                rngs, 
+                text, 
+                images, 
+                method=method
+                )
+    else:
+        raise Exception("dude you used an unsupported method for model initialization")
 
     params = variables["params"]
 

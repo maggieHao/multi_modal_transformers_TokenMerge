@@ -4,6 +4,9 @@ Transformer architecture implementation.
 Heavily inspired by: https://github.com/google/flax/blob/main/examples/wmt/models.py
 """
 
+from typing import Optional
+from jax.typing import ArrayLike
+
 import jax
 import jax.numpy as jnp
 import flax
@@ -21,7 +24,7 @@ class MLPBlock(nn.Module):
     activation: DictConfig
     norm: DictConfig
     dense_out: DictConfig
-
+    
     @nn.compact
     def __call__(self, inputs, train=False):
         """Apply MLPBlock module."""
@@ -43,10 +46,15 @@ class Encoder1DBlock(nn.Module):
     dropout: DictConfig
     self_attention: DictConfig
     mlp_block: DictConfig
-
+    train: Optional[bool] = None
+    mask: Optional[ArrayLike] = None
+    
     @nn.compact
-    def __call__(self, inputs, train=False, mask=None):
+    def __call__(self, inputs, mask=None, train=None):
         
+        train = nn.merge_param('train', self.train, train)
+        mask = nn.merge_param('mask', self.mask, mask)
+
         # Attention block.
         x = instantiate(self.layer_norm)(inputs)
         x = instantiate(self.self_attention)(x, mask, not train)
@@ -60,6 +68,7 @@ class Encoder1DBlock(nn.Module):
         y = instantiate(self.mlp_block, _recursive_=False)(y, train)
 
         return x + y
+    
 
 class StackedEncoder1DBlock(nn.Module):
     """Stacking Transformer encoder layers."""
@@ -68,11 +77,21 @@ class StackedEncoder1DBlock(nn.Module):
     encoder_1d_block: DictConfig
 
     @nn.compact
-    def __call__(self, x, train=True, mask=None):
-        for _ in range(self.num_blocks):
-            x = instantiate(self.encoder_1d_block, _recursive_=False)(x)
+    def __call__(self, x, train=False, mask=None):
 
-        return x
+        # Use remat_scan to iterate over Encoder1DBlock
+        attention_stack = nn.remat_scan(
+            Encoder1DBlock,
+            lengths=(1, self.num_blocks)
+        )
+
+        return attention_stack(layer_norm=self.encoder_1d_block["layer_norm"],
+                               dropout=self.encoder_1d_block["dropout"],
+                               self_attention=self.encoder_1d_block["self_attention"],
+                               mlp_block=self.encoder_1d_block["mlp_block"],
+                               train=train,
+                               mask=mask,
+                              )(x)
 
 class MultiHeadAttentionPooling(nn.Module):
   """Multihead Attention Pooling."""
