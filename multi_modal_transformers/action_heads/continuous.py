@@ -21,10 +21,8 @@ class ContinuousActionHead(nn.Module):
         mean = jnp.squeeze(mean)
         return jnp.tanh(mean / self.max_action) * self.max_action
 
-        
-
     def l2_loss(self, readouts, actions):
         mean = self(readouts)
-        return jnp.mean(jnp.square(mean - actions), axis=-1)
+        return jnp.square(mean - actions)
 
 

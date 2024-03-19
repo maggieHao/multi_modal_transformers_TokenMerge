@@ -59,11 +59,11 @@ class Text(TokenSet):
     super().__init__(num_tokens, timestep)
     self.modality = "text"
 
-  def inter_attention_rule(self, tokenset):
+  def inter_attention_rule(self, tokenset)->jax.typing.ArrayLike:
     """
     Text tokens attend causally to all past inputs by default.
     """
-    if isinstance(self, Readout): # do not attend to readout tokens
+    if isinstance(tokenset, Readout): # do not attend to readout tokens
         return jnp.zeros((self.num_tokens, tokenset.num_tokens))
     elif tokenset.timestep <= self.timestep:
       return jnp.ones((self.num_tokens, tokenset.num_tokens))
@@ -123,7 +123,7 @@ class Image(TokenSet):
     """
     Image tokens attend causally to all past inputs by default.
     """
-    if isinstance(self, Readout): # do not attend to readout tokens
+    if isinstance(tokenset, Readout): # do not attend to readout tokens
         return jnp.zeros((self.num_tokens, tokenset.num_tokens))
     elif tokenset.timestep <= self.timestep:
       return jnp.ones((self.num_tokens, tokenset.num_tokens))
@@ -158,9 +158,9 @@ class Readout(TokenSet):
     """
     Readout attends to all past tokens except other readout tokens.
     """
-    if isinstance(tokenset, self.__class__): # do not attend to readout tokens
-        return jnp.zeros((self.num_tokens, tokenset.num_tokens))
-    elif tokenset.timestep <= self.timestep: # attend causally to previous tokens
+    #if isinstance(tokenset, self.__class__): # do not attend to readout tokens
+    #    return jnp.zeros((self.num_tokens, tokenset.num_tokens))
+    if tokenset.timestep <= self.timestep: # attend causally to previous tokens
       return jnp.ones((self.num_tokens, tokenset.num_tokens))
     else: 
       return jnp.zeros((self.num_tokens, tokenset.num_tokens))
@@ -196,7 +196,7 @@ class TokenSequence:
     """
     Parse the string representation of the token sequence.
     """
-    # TODO: run assert statements to ensure correct representation syntax
+    # TODO: add assert statements to ensure correct representation syntax
 
     # parse seq string into timesteps blocks of tokens
     block = re.findall(r'\[(.*?)\]', self.token_sequence_str)
@@ -217,13 +217,15 @@ class TokenSequence:
 
     # assemble the sequence
     sequence = []
-    for timestep, (block, repeat) in enumerate(parsed_iter):
+    seq_timestep = 0
+    for block_idx, (block, repeat) in enumerate(parsed_iter):
       token_groups = re.split(r';', block)
       for _ in range(repeat):
         for token_group in token_groups:
           token_group_name = re.search(r'^(.*?)\{', token_group).group(1)
           num_tokens = int(re.search(r'\d+', token_group).group())
-          sequence.append(getattr(multi_modal_transformers.tokenizers.token_sequencer, token_group_name)(num_tokens, timestep))
+          sequence.append(globals()[token_group_name](num_tokens, seq_timestep))
+        seq_timestep += 1 # add timestep index for each block in seq
     
     return sequence
     
@@ -234,11 +236,11 @@ class TokenSequence:
     """
     embedding_seq = []
     for slice_id, token_group in zip(slice_idx, self.token_sequence):
-      embedding_seq.append(jax.lax.dynamic_slice_in_dim(
+        embedding_seq.append(jax.lax.dynamic_slice_in_dim(
           getattr(embeddings, token_group.modality),
           slice_id[0],
           slice_id[1],
-          axis=1
+          axis=1, # sequence dimension
           ))
 
     return jnp.concatenate(embedding_seq, axis=1)
@@ -260,7 +262,7 @@ class TokenSequence:
         slice_idx.append(
                 tuple([
                     start_idx, 
-                    token_group.num_tokens
+                    token_group.num_tokens,
                     ])
                 )
         modality_idx[token_group.modality] = start_idx + token_group.num_tokens
@@ -287,15 +289,6 @@ class TokenSequence:
           curr_idx += token_group.num_tokens
       return jnp.ravel(jnp.array(idx))
 
-  @abc.abstractmethod
-  def applying_pruning(self):
-    raise NotImplemented
-
-  @abc.abstractmethod
-  def apply_merging(self):
-    raise NotImplemented
-    
-
 @flax.struct.dataclass
 class TokenEmbeddings:
     text: jax.Array = jnp.array([])
@@ -304,19 +297,16 @@ class TokenEmbeddings:
     
 
 if __name__=="__main__":
-    # basic tests of token set
-    num_tokens = 4
-    timestep = 0
-    text_token_1 = Text(num_tokens, timestep)
-    print(text_token_1.attention_rule([text_token_1, text_token_2]))
-
-
     # basic tests of token sequence
-    multi_modal_seq = "[Text{4}] [Text{4}]"
+    multi_modal_seq = "[TaskDescriptionPrefix{2}] [Image{2};Readout{2}]*2"
     seq = TokenSequence(multi_modal_seq)
     attention_mask = seq.generate_attention_mask()
+    print(attention_mask.shape)
+    print(attention_mask)
+    
+    print(seq.get_modality_idx("readouts"))
 
     # assemble text embeddings
-    dummy_embeddings = jnp.vstack([jnp.ones(10) * i for i in range(8)])
-    dummy_embeddings = TokenEmbeddings(dummy_embeddings, Text)
-    seq_embeddings = seq.assemble_embeddings([dummy_embeddings])
+    #dummy_embeddings = jnp.vstack([jnp.ones(10) * i for i in range(8)])
+    #dummy_embeddings = TokenEmbeddings(dummy_embeddings, Text)
+    #seq_embeddings = seq.assemble_embeddings([dummy_embeddings])

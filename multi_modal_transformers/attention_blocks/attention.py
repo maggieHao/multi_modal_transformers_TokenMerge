@@ -4,7 +4,7 @@ Transformer architecture implementation.
 Heavily inspired by: https://github.com/google/flax/blob/main/examples/wmt/models.py
 """
 
-from typing import Optional
+from typing import Optional, Callable
 from jax.typing import ArrayLike
 
 import jax
@@ -38,7 +38,6 @@ class MLPBlock(nn.Module):
         
         return x
 
-
 class Encoder1DBlock(nn.Module):
     """Transformer encoder layer."""
 
@@ -67,8 +66,34 @@ class Encoder1DBlock(nn.Module):
         y = instantiate(self.layer_norm)(x)
         y = instantiate(self.mlp_block, _recursive_=False)(y, train)
 
-        return x + y
-    
+        return x + y, None
+
+class AddPositionEmbedding(nn.Module):
+    """Adds learned positional embeddings to the inputs.
+
+    Attributes:
+      posemb_init: positional embedding initializer.
+    """
+
+    posemb_init: Callable
+
+    @nn.compact
+    def __call__(self, inputs):
+        """Applies the AddPositionEmbs module.
+
+        Args:
+          inputs: Inputs to the layer.
+
+        Returns:
+          Output tensor with shape `(bs, timesteps, in_dim)`.
+        """
+        # inputs.shape is (batch_size, seq_len, emb_dim).
+        assert inputs.ndim == 3, (
+            "Number of dimensions should be 3," " but it is: %d" % inputs.ndim
+        )
+        pos_emb_shape = (1, inputs.shape[1], inputs.shape[2])
+        pe = self.param("pos_embedding", self.posemb_init, pos_emb_shape)
+        return inputs + pe
 
 class StackedEncoder1DBlock(nn.Module):
     """Stacking Transformer encoder layers."""
@@ -78,20 +103,32 @@ class StackedEncoder1DBlock(nn.Module):
 
     @nn.compact
     def __call__(self, x, train=False, mask=None):
+        
+        # apply learnt position embedding
+        x = AddPositionEmbedding(
+                posemb_init=nn.initializers.normal(stddev=0.02),
+                name="posembed_input",
+                )(x)
 
-        # Use remat_scan to iterate over Encoder1DBlock
-        attention_stack = nn.remat_scan(
+        # Use scan to iterate over Encoder1DBlock layers
+        attention_stack = nn.scan(
             Encoder1DBlock,
-            lengths=(1, self.num_blocks)
-        )
+            variable_axes={'params': 0},
+            variable_broadcast=False, 
+            split_rngs={'params': True, 'dropout': True},
+            length=self.num_blocks,
+            )
 
-        return attention_stack(layer_norm=self.encoder_1d_block["layer_norm"],
+        x, _ = attention_stack(layer_norm=self.encoder_1d_block["layer_norm"],
                                dropout=self.encoder_1d_block["dropout"],
                                self_attention=self.encoder_1d_block["self_attention"],
                                mlp_block=self.encoder_1d_block["mlp_block"],
                                train=train,
                                mask=mask,
-                              )(x)
+                              )(x, None)
+        
+        return x
+
 
 class MultiHeadAttentionPooling(nn.Module):
   """Multihead Attention Pooling."""
@@ -104,7 +141,7 @@ class MultiHeadAttentionPooling(nn.Module):
   @nn.compact
   def __call__(self, x, train=False):
 
-    # for now infer dimension from input (TODO: consider refactoring this)
+    # for now infer dimension from input
     batch_size, sequence_length, embedding_dim = x.shape
 
     # the pool operation uses a learnt input for generating query tensor

@@ -1,6 +1,7 @@
 """
 Octo model architecture.
 """
+from copy import copy, deepcopy
 from typing import Any, Callable
 from dataclasses import dataclass
 from functools import partial
@@ -43,6 +44,7 @@ from omegaconf import OmegaConf
 from omegaconf import DictConfig
 
 # model metrics
+import wandb
 from clu import metrics
 
 
@@ -54,7 +56,7 @@ class Octo(nn.Module):
     def setup(self):
         # token sequence manager
         self.token_sequence = TokenSequence(self.config.input_sequence)
-        self.attention_mask = self.token_sequence.generate_attention_mask()
+        self.attention_mask = self.token_sequence.generate_attention_mask() 
         self.slice_idx = self.token_sequence.slice_idx
         self.assemble_embeddings = partial(self.token_sequence.assemble_embeddings, slice_idx=self.slice_idx)
 
@@ -66,7 +68,8 @@ class Octo(nn.Module):
         # attention blocks
         self.attention_blocks = instantiate(self.config.attention_blocks.stacked_encoder_1d_block, _recursive_=False)
 
-        # attention heads 
+        # action heads 
+        self.action_space_dim = self.config.action_heads.action_space_dim
         if self.config.action_heads.diffusion_action_head is not None:
             self.diffusion_action_head = instantiate(self.config.action_heads.diffusion_action_head, _recursive_=False)
         
@@ -105,7 +108,7 @@ class Octo(nn.Module):
         embeddings = self.attention_blocks(embeddings, mask=self.attention_mask, train=True)
 
         # filter for readout embeddings
-        readout_idx = self.token_sequence.get_modality_idx("readouts")     
+        readout_idx = self.token_sequence.get_modality_idx("readouts")
         readout_embeddings = jnp.take(embeddings, readout_idx, axis=1)
 
         return readout_embeddings
@@ -151,8 +154,8 @@ class Octo(nn.Module):
         """
         readout_embeddings = self.generate_readouts(text_tokens, images)
         loss = self.continuous_action_head.l2_loss(readout_embeddings, actions)
-
-        return jnp.mean(loss, axis=-1)
+        
+        return jnp.mean(loss) * self.action_space_dim
 
 
 ## Model Training State ##
@@ -184,8 +187,11 @@ def diffusion_train_step(model, train_state, text_tokens, images, actions):
     train_state = train_state.apply_gradients(grads=grads["params"])
    
     # update metrics
+    wandb.log({
+            "loss": loss,
+        })
     metric_updates = train_state.metrics.single_from_model_output(
-            denoise_loss = loss,
+            loss=loss,
             )
     metrics = train_state.metrics.merge(metric_updates)
     train_state = train_state.replace(metrics=metrics)
@@ -218,8 +224,11 @@ def continuous_train_step(model, train_state, text_tokens, images, actions):
     train_state = train_state.apply_gradients(grads=grads["params"])
    
     # update metrics
+    wandb.log({
+            "loss": loss,
+        })
     metric_updates = train_state.metrics.single_from_model_output(
-            denoise_loss = loss,
+            loss=loss,
             )
     metrics = train_state.metrics.merge(metric_updates)
     train_state = train_state.replace(metrics=metrics)
@@ -228,7 +237,7 @@ def continuous_train_step(model, train_state, text_tokens, images, actions):
 
 @struct.dataclass
 class OCTOMetrics(metrics.Collection):
-    denoise_loss: metrics.Average.from_output("denoise_loss")
+    loss: metrics.Average.from_output("loss")
 
 class OCTOTrainState(train_state.TrainState):
     metrics: OCTOMetrics
