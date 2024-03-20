@@ -69,24 +69,13 @@ class Encoder1DBlock(nn.Module):
         return x + y, None
 
 class AddPositionEmbedding(nn.Module):
-    """Adds learned positional embeddings to the inputs.
-
-    Attributes:
-      posemb_init: positional embedding initializer.
-    """
+    """Adds learned positional embeddings to the inputs."""
 
     posemb_init: Callable
 
     @nn.compact
     def __call__(self, inputs):
-        """Applies the AddPositionEmbs module.
-
-        Args:
-          inputs: Inputs to the layer.
-
-        Returns:
-          Output tensor with shape `(bs, timesteps, in_dim)`.
-        """
+        """Applies the AddPositionEmbs module."""
         # inputs.shape is (batch_size, seq_len, emb_dim).
         assert inputs.ndim == 3, (
             "Number of dimensions should be 3," " but it is: %d" % inputs.ndim

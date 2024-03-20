@@ -66,7 +66,7 @@ def image_to_patches(image, patch_size, normalize):
     # normalize pixel values
     if normalize:
         patches = (2*(patches/255.0)) - 1.0
-        patches = patches / jnp.sqrt(patch_size)
+        #patches = patches / jnp.sqrt(patch_size)
 
     return patches
 

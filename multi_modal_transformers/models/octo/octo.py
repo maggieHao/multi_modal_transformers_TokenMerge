@@ -57,6 +57,21 @@ class Octo(nn.Module):
         # token sequence manager
         self.token_sequence = TokenSequence(self.config.input_sequence)
         self.attention_mask = self.token_sequence.generate_attention_mask() 
+        
+        # repeat attention mask for heads and batch
+        self.attention_mask = jnp.repeat(
+                                jnp.expand_dims(
+                                    jnp.repeat(
+                                        self.attention_mask, 
+                                        self.config.attention_blocks.stacked_encoder_1d_block.num_blocks,
+                                        axis=0
+                                        ),
+                                    axis=0,
+                                    ),
+                                64,
+                                axis=0,
+                                )
+        jax.debug.print("{}", self.attention_mask.shape)
         self.slice_idx = self.token_sequence.slice_idx
         self.assemble_embeddings = partial(self.token_sequence.assemble_embeddings, slice_idx=self.slice_idx)
 
@@ -64,6 +79,7 @@ class Octo(nn.Module):
         self.text_encoder = instantiate(self.config.tokenizers.text.encoder) 
         self.image_encoder = instantiate(self.config.tokenizers.images.encoder, _recursive_=False)
         self.readout_encoder = instantiate(self.config.tokenizers.readouts.encoder, _recursive_=True) 
+
         
         # attention blocks
         self.attention_blocks = instantiate(self.config.attention_blocks.stacked_encoder_1d_block, _recursive_=False)
@@ -152,10 +168,9 @@ class Octo(nn.Module):
         """
         Compute l2 loss for continuous action head.
         """
-        readout_embeddings = self.generate_readouts(text_tokens, images)
-        loss = self.continuous_action_head.l2_loss(readout_embeddings, actions)
-        
-        return jnp.mean(loss) * self.action_space_dim
+        predictions = self.predict_continuous_action(text_tokens, images)
+         
+        return jnp.mean(jnp.square(predictions - actions)) * self.action_space_dim
 
 
 ## Model Training State ##
@@ -233,7 +248,7 @@ def continuous_train_step(model, train_state, text_tokens, images, actions):
     metrics = train_state.metrics.merge(metric_updates)
     train_state = train_state.replace(metrics=metrics)
 
-    return train_state
+    return train_state, grads
 
 @struct.dataclass
 class OCTOMetrics(metrics.Collection):
