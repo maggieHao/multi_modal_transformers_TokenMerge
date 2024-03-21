@@ -8,11 +8,10 @@ from transformers import FlaxT5EncoderModel, AutoTokenizer, AutoConfig
 class T5Tokenizer(nn.Module):
 
     def setup(self):
-        self.config = AutoConfig.from_pretrained('t5-base')
-        self.model = FlaxT5EncoderModel(self.config).module
+        self.model = FlaxT5EncoderModel(AutoConfig.from_pretrained('t5-base')).module
 
     def __call__(self, input_ids):
-        embeddings = self.model(input_ids).last_hidden_state
+        embeddings = jax.lax.stop_gradient(self.model(input_ids).last_hidden_state)
         return embeddings
 
 if __name__ == "__main__":

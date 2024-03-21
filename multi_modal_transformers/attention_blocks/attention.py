@@ -56,7 +56,7 @@ class Encoder1DBlock(nn.Module):
 
         # Attention block.
         x = instantiate(self.layer_norm)(inputs)
-        x = instantiate(self.self_attention)(x, mask, not train)
+        x = instantiate(self.self_attention)(x, x, mask=mask, deterministic = not train)
         x = instantiate(self.dropout)(x, not train)
         
         # skip connection

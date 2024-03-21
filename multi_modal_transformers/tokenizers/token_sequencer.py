@@ -158,9 +158,9 @@ class Readout(TokenSet):
     """
     Readout attends to all past tokens except other readout tokens.
     """
-    #if isinstance(tokenset, self.__class__): # do not attend to readout tokens
-    #    return jnp.zeros((self.num_tokens, tokenset.num_tokens))
-    if tokenset.timestep <= self.timestep: # attend causally to previous tokens
+    if isinstance(tokenset, self.__class__): # do not attend to readout tokens
+        return jnp.zeros((self.num_tokens, tokenset.num_tokens))
+    elif tokenset.timestep <= self.timestep: # attend causally to previous tokens
       return jnp.ones((self.num_tokens, tokenset.num_tokens))
     else: 
       return jnp.zeros((self.num_tokens, tokenset.num_tokens))
@@ -274,6 +274,7 @@ class TokenSequence:
     This method generates an attention mask for the given sequence.
     """ 
     attention_mask = jnp.vstack([token_group.attention_rule(self.token_sequence) for token_group in self.token_sequence])
+    attention_mask = jnp.asarray(attention_mask, dtype=bool)
     return e.repeat(attention_mask, "q k -> repeats q k", repeats=repeats)
     
   def get_modality_idx(self, modality):

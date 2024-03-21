@@ -16,13 +16,14 @@ class ContinuousActionHead(nn.Module):
 
     @nn.compact
     def __call__(self, readouts):
-        embeddings = instantiate(self.attention_pooling, _recursive_=False)(readouts)
+        embeddings = jnp.mean(readouts, axis=-2)
+        #embeddings = instantiate(self.attention_pooling, _recursive_=False)(readouts)
+        #embeddings = e.rearrange(embeddings, "batch seq embedding -> (batch seq) embedding")
+        #jax.debug.print("action head post pooling shape: {}", embeddings.shape)
+        
         mean = instantiate(self.dense, _recursive_=True)(embeddings)
-        #mean = jnp.squeeze(mean)
+        mean = e.rearrange(mean, "batch (seq mean) -> batch seq mean", seq = 1)
+        #jax.debug.print("action head post mean projection shape: {}", mean.shape)
+
         return jnp.tanh(mean / self.max_action) * self.max_action
-
-    def l2_loss(self, readouts, actions):
-        mean = self(readouts)
-        return jnp.mean(jnp.square(mean - actions))
-
 
