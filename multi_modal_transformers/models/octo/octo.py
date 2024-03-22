@@ -76,13 +76,10 @@ class Octo(nn.Module):
 
         # action heads 
         self.action_space_dim = self.config.action_heads.action_space_dim
+        for action_head in self.config.action_heads.heads:
+            exec("self.{action_head} = instantiate(self.config.action_heads.{action_head}, _recursive_=False)")
 
-        # TODO: refactor to only include one action head config
-        if self.config.action_heads.diffusion_action_head is not None:
-            self.diffusion_action_head = instantiate(self.config.action_heads.diffusion_action_head, _recursive_=False)
-        
-        if self.config.action_heads.continuous_action_head is not None:
-            self.continuous_action_head = instantiate(self.config.action_heads.continuous_action_head, _recursive_=False)
+    # transformer backbone
 
     def generate_readouts(self, text_tokens, images):
         """
@@ -123,6 +120,8 @@ class Octo(nn.Module):
         filtered_embeddings = jnp.take(embeddings, readout_idx, axis=1)
 
         return filtered_embeddings
+
+    # diffusion action head
         
     def predict_diffusion_denoise_term(self, text_tokens, images, time, noisy_actions):
         """
@@ -150,9 +149,11 @@ class Octo(nn.Module):
 
         return action_prediction
 
+    # continuous action head
+
     def predict_continuous_action(self, text_tokens, images):
         """
-        Predict nex action using continuous action head.
+        Predict next action using continuous action head.
         """
         readout_embeddings = self.generate_readouts(text_tokens, images)
         action_prediction = self.continuous_action_head(readout_embeddings)
@@ -168,6 +169,21 @@ class Octo(nn.Module):
         
         return jnp.sum(jnp.square(predictions - actions), axis=-1)
 
+    # categorical action head
+
+    def predict_categorical_action(self, text_tokens, images):
+        """
+        Predict next action using categorical action head.
+        """
+        readout_embeddings = self.generate_readouts(text_tokens, images)
+        action_prediction = self.categorical_action_head(readout_embeddings)
+        
+        return action_prediction
+
+    def compute_ce_loss(self, text_tokens, images, actions):
+        """
+        Compute cross-entropy loss for categorical action head.
+        """
 
 ## Model Training State ##
 
@@ -207,7 +223,7 @@ def diffusion_train_step(model, train_state, text_tokens, images, actions):
     metrics = train_state.metrics.merge(metric_updates)
     train_state = train_state.replace(metrics=metrics)
 
-    return train_state
+    return train_state, grads
 
 def continuous_train_step(model, train_state, text_tokens, images, actions):
     """

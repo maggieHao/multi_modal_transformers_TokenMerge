@@ -96,8 +96,10 @@ class DiffusionActionHead(nn.Module):
         Predicts denoising term in diffusion process.
         """
         # pool the readouts into one embedding for conditioning
-        embeddings = self.pooling(readouts)
-        embeddings = e.rearrange(embeddings, "batch readout embed -> batch (readout embed)")
+        #embeddings = self.pooling(readouts)
+        #embeddings = e.rearrange(embeddings, "batch readout embed -> batch (readout embed)")
+        
+        embeddings = jnp.mean(readouts, axis=-2)
         
         # predict denoise term 
         denoise_term = self.denoiser(noisy_actions, time, embeddings)
