@@ -15,6 +15,7 @@ import flax.linen as nn
 from flax import struct
 from flax.linen import initializers
 from flax.training import train_state
+import optax
 import einops as e
 
 # multi-modal architectures
@@ -31,6 +32,7 @@ from multi_modal_transformers.tokenizers.readout.readout import AddPositionEmbed
 from multi_modal_transformers.tokenizers.images.image_tokenizer import ImageTokenizer, SingleImageTokenizer
 from multi_modal_transformers.tokenizers.text.text_tokenizer import BasicTextTokenizer
 from multi_modal_transformers.attention_blocks.attention import Encoder1DBlock, StackedEncoder1DBlock
+from multi_modal_transformers.action_heads.categorical import assign_bins 
 
 # huggingface transformers
 from transformers import AutoTokenizer
@@ -54,15 +56,18 @@ class Octo(nn.Module):
     config: DictConfig
 
     def setup(self):
+        # useful architecture dimensions
+        self.action_space_dim = self.config.action_heads.action_space_dim
+
         # token sequence manager
         self.token_sequence = TokenSequence(self.config.input_sequence)
         
-        # generate attention mask
+        # generate sequence attention mask
         self.attention_mask = self.token_sequence.generate_attention_mask(
                 repeats=self.config.attention_blocks.stacked_encoder_1d_block.encoder_1d_block.self_attention.num_heads
                 ) 
         
-        # generate assemble embeddings function (Revise this section for bugs)
+        # generate sequence assemble embeddings method
         self.slice_idx = self.token_sequence.slice_idx
         self.assemble_embeddings = partial(self.token_sequence.assemble_embeddings, slice_idx=self.slice_idx)
 
@@ -75,9 +80,11 @@ class Octo(nn.Module):
         self.attention_blocks = instantiate(self.config.attention_blocks.stacked_encoder_1d_block, _recursive_=False)
 
         # action heads 
-        self.action_space_dim = self.config.action_heads.action_space_dim
         for action_head in self.config.action_heads.heads:
-            exec("self.{action_head} = instantiate(self.config.action_heads.{action_head}, _recursive_=False)")
+            exec(f"self.{action_head.name} = instantiate(action_head.module, _recursive_=False)")
+            if action_head.name=="categorical_action_head":
+                self.num_bins = self.config.action_heads.num_bins
+                self.max_action = self.config.action_heads.max_action
 
     # transformer backbone
 
@@ -92,9 +99,7 @@ class Octo(nn.Module):
         
         image_embeddings = self.image_encoder(images)
         image_embeddings = e.rearrange(image_embeddings, "batch history patch embedding -> batch (history patch) embedding")
-        
 
-        # TODO: inspect this method + its parameters
         readout_dummy = jnp.zeros((
             image_embeddings.shape[0], # batch dimension
             self.config.num_observation_blocks * self.config.tokens_per_readout,
@@ -109,7 +114,6 @@ class Octo(nn.Module):
                 readouts = readout_embeddings,
                 )
         embeddings = self.assemble_embeddings(embeddings)
-
 
         # apply attention blocks
         mask = jnp.repeat(jnp.expand_dims(self.attention_mask, axis=0), batch_size, axis=0) 
@@ -160,7 +164,7 @@ class Octo(nn.Module):
 
         return action_prediction
 
-    def compute_continuous_l2_loss(self, text_tokens, images, actions):
+    def compute_l2_loss(self, text_tokens, images, actions):
         """
         Compute l2 loss for continuous action head.
         """
@@ -171,19 +175,29 @@ class Octo(nn.Module):
 
     # categorical action head
 
-    def predict_categorical_action(self, text_tokens, images):
+    def predict_action_logits(self, text_tokens, images):
         """
         Predict next action using categorical action head.
         """
         readout_embeddings = self.generate_readouts(text_tokens, images)
-        action_prediction = self.categorical_action_head(readout_embeddings)
-        
-        return action_prediction
+        logits = self.categorical_action_head(readout_embeddings)
+         
+        return logits
 
     def compute_ce_loss(self, text_tokens, images, actions):
-        """
+       """
         Compute cross-entropy loss for categorical action head.
-        """
+       """
+       target_bin = assign_bins(actions, (-self.max_action, self.max_action), self.num_bins)
+       targets = jax.nn.one_hot(target_bin, num_classes=self.num_bins)
+
+       logits = self.predict_action_logits(text_tokens, images)
+
+       loss = optax.softmax_cross_entropy(logits=logits, labels=targets)
+
+       return loss
+
+
 
 ## Model Training State ##
 
@@ -235,7 +249,6 @@ def continuous_train_step(model, train_state, text_tokens, images, actions):
     train_rngs["dropout"] = jax.random.fold_in(train_state.rngs["dropout"], train_state.step)
     train_rngs["patch_encoding"] = jax.random.fold_in(train_state.rngs["patch_encoding"], train_state.step)
 
-    # compute loss and gradient of loss
     def mse_loss(params):
         loss = train_state.apply_fn(
                         {"params": params},
@@ -243,12 +256,52 @@ def continuous_train_step(model, train_state, text_tokens, images, actions):
                         images,
                         actions,
                         rngs=train_rngs,
-                        method="compute_continuous_l2_loss"
+                        method="compute_l2_loss"
                         )
 
         return jnp.mean(loss)
 
     grad_fn = jax.value_and_grad(mse_loss)
+    loss, grads = grad_fn(train_state.params)
+
+    # perform gradient descent using computed gradients
+    train_state = train_state.apply_gradients(grads=grads)
+   
+    # update metrics
+    wandb.log({
+            "loss": loss,
+        })
+    metric_updates = train_state.metrics.single_from_model_output(
+            loss=loss,
+            )
+    metrics = train_state.metrics.merge(metric_updates)
+    train_state = train_state.replace(metrics=metrics)
+
+    return train_state, grads
+
+def categorical_train_step(model, train_state, text_tokens, images, actions):
+    """
+    Performs one step of continuous action head training on a batch of data.
+    """
+    
+    # generate new random keys
+    train_rngs = {}
+    train_rngs["dropout"] = jax.random.fold_in(train_state.rngs["dropout"], train_state.step)
+    train_rngs["patch_encoding"] = jax.random.fold_in(train_state.rngs["patch_encoding"], train_state.step)
+
+    def ce_loss(params):
+        loss = train_state.apply_fn(
+                        {"params": params},
+                        text_tokens, 
+                        images,
+                        actions,
+                        rngs=train_rngs,
+                        method="compute_ce_loss"
+                        )
+
+        return jnp.mean(loss)
+
+    grad_fn = jax.value_and_grad(ce_loss)
     loss, grads = grad_fn(train_state.params)
 
     # perform gradient descent using computed gradients
@@ -275,6 +328,7 @@ class OCTOTrainState(train_state.TrainState):
     text_tokenize_fn: Callable
     rngs: dict
     continuous_train_step: Callable = continuous_train_step
+    categorical_train_step: Callable = categorical_train_step
     diffusion_train_step: Callable = diffusion_train_step
 
 def create_octo_train_state(
@@ -298,12 +352,19 @@ def create_octo_train_state(
             diffusion_inputs["noisy_actions"],
             method=method 
         )
-    elif method=="predict_continuous_action":
+    elif method=="predict_action_logits":
         variables = model.init(
                 rngs, 
                 text, 
                 images, 
                 method=method
+                )
+    elif method=="predict_continuous_action":
+        variables = model.init(
+                rngs, 
+                text,
+                images,
+                method=method,
                 )
     else:
         raise Exception("dude you used an unsupported method for model initialization")
