@@ -56,7 +56,7 @@ class CompressedMultiHeadDotProductAttention(nn.Module):
     deterministic: Optional[bool] = None,
     dropout_rng: Optional[PRNGKey] = None,
     tokenset_idx: Optional[Array] = None, # start idx  and num tokens for each modality
-    tokenset_merge_k: Optional[int] = None, # top-k tokens to keep for each modality
+    tokenset_merge_k: Optional[int] = None, # top-k tokens to keep for each modality (only for pruning)
   ):
     """Applies multi-head dot product attention on the input data.
 
@@ -325,32 +325,21 @@ class CompressedMultiHeadDotProductAttention(nn.Module):
 
     return out
 
-
-
-
 class CompressedEncoder1DBlock(nn.Module):
     """Transformer encoder layer."""
 
     layer_norm: DictConfig 
     dropout: DictConfig
-    self_attention: DictConfig
+    compressed_attention: DictConfig
     mlp_block: DictConfig
     train: Optional[bool] = None
-    mask: Optional[ArrayLike] = None
     
     @nn.compact
-    def __call__(self, inputs, mask=None, train=None):
-        
-        train = nn.merge_param('train', self.train, train)
-        mask = nn.merge_param('mask', self.mask, mask)
+    def __call__(self, inputs, tokenset_idx, tokenset_merge_k, mask=None, train=None):
 
         # Attention block.
         x = instantiate(self.layer_norm)(inputs)
-        
-        # TODO: need to ensure attention implementation accounts for merging/pruning of sequence
-        x = instantiate(self.self_attention)(x, x, mask=mask, deterministic = not train)
-        
-
+        x = instantiate(self.compressed_attention)(x, x, tokenset_idx=tokenset_idx, tokenset_merge_k=tokenset_merge_k, mask=mask, train=not train)
         x = instantiate(self.dropout)(x, not train)
         
         # skip connection
@@ -378,14 +367,14 @@ class AddPositionEmbedding(nn.Module):
         pe = self.param("pos_embedding", self.posemb_init, pos_emb_shape)
         return inputs + pe
 
-class StackedEncoder1DBlock(nn.Module):
+class StackedCompressedEncoder1DBlock(nn.Module):
     """Stacking Transformer encoder layers."""
 
     num_blocks: int
     encoder_1d_block: DictConfig
 
     @nn.compact
-    def __call__(self, x, train=False, mask=None):
+    def __call__(self, x, tokenset_idx, tokenset_merge_k, masks, train=False,):
         
         # apply learnt position embedding
         x = AddPositionEmbedding(
@@ -393,22 +382,15 @@ class StackedEncoder1DBlock(nn.Module):
                 name="posembed_input",
                 )(x)
 
-        # Use scan to iterate over ToMeEncoder1DBlock layers
-        attention_stack = nn.scan(
-            Encoder1DBlock,
-            variable_axes={'params': 0},
-            variable_broadcast=False, 
-            split_rngs={'params': True, 'dropout': True},
-            length=self.num_blocks,
-            )
-
-        x, _ = attention_stack(layer_norm=self.encoder_1d_block["layer_norm"],
-                               dropout=self.encoder_1d_block["dropout"],
-                               self_attention=self.encoder_1d_block["self_attention"],
-                               mlp_block=self.encoder_1d_block["mlp_block"],
-                               train=train,
-                               mask=mask,
-                              )(x, None)
+        # TODO: consider converting to scan later
+        for layer_idx in range(self.num_blocks):
+            x, _ = instantiate(self.encoder_1d_block)(
+                    x, 
+                    tokenset_idx=tokenset_idx[layer_idx],
+                    tokenset_merge_k=tokenset_merge_k[layer_idx],
+                    mask=masks[layer_idx],
+                    train=train,
+                    )
         
         return x
 
