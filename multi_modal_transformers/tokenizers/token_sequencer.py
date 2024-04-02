@@ -24,9 +24,10 @@ class TokenSet(abc.ABC):
   to other tokens in a sequence of token sets.
   """
 
-  def __init__(self, num_tokens, timestep):
+  def __init__(self, num_tokens, timestep, tokens_compressed_per_layer=0):
     self.num_tokens = num_tokens # number of tokens in the set
     self.timestep = timestep # subsequence timestep
+    self.tokens_compressed_per_layer = tokens_compressed_per_layer # number of tokens compressed per layer
     self.modality_sequence_idx = None # the index of the modality in the sequence
 
   @abc.abstractmethod
@@ -187,13 +188,14 @@ class TokenSequence:
   A class which encapsulates a particular token sequence.
   """
 
-  def __init__(self, token_sequence: str):
+  def __init__(self, token_sequence: str, token_compression_sequence: str = None):
     self.token_sequence_str = token_sequence
+    self.token_compression_sequence_str = token_compression_sequence
     self.token_sequence = self._parse()
     self.slice_idx = self._generate_embedding_slices()
     self.assemble_embeddings = jax.jit(self._assemble_embeddings, static_argnames=["slice_idx"])
 
-  def _parse(self):
+  def _parse(self, layer=0):
     """
     Parse the string representation of the token sequence.
     """
@@ -212,21 +214,43 @@ class TokenSequence:
       else:
         pattern = r'\*(\d+)'
         repeats.append(int(re.findall(pattern, repeat)[0]))
+    
 
-    # zip blocks and repeats for assembling sequence
-    parsed_iter = zip(block, repeats)
-
-    # assemble the sequence
-    sequence = []
-    seq_timestep = 0
-    for block_idx, (block, repeat) in enumerate(parsed_iter):
-      token_groups = re.split(r';', block)
-      for _ in range(repeat):
-        for token_group in token_groups:
-          token_group_name = re.search(r'^(.*?)\{', token_group).group(1)
-          num_tokens = int(re.search(r'\d+', token_group).group())
-          sequence.append(globals()[token_group_name](num_tokens, seq_timestep))
-        seq_timestep += 1 # add timestep index for each block in seq
+    
+    # parse compressed token sequence
+    if self.token_compression_sequence_str is not None:
+        compressed_block = re.findall(r'\[(.*?)\]', self.token_compression_sequence_str)
+        parsed_iter = zip(block, compressed_block, repeats)
+        
+        sequence = []
+        seq_timestep = 0
+        for block_idx, (block, compressed_block, repeat) in enumerate(parsed_iter):
+          token_groups = re.split(r';', block)
+          compressed_token_groups = re.split(r';', compressed_block)
+          for _ in range(repeat):
+            for token_group, compressed_token_group in zip(token_groups, compressed_token_groups):
+              token_group_name = re.search(r'^(.*?)\{', token_group).group(1)
+              num_tokens = int(re.search(r'\d+', token_group).group())
+              num_compressed_tokens = int(re.search(r'\d+', compressed_token_group).group())
+              print("num_tokens", num_tokens)
+              print("num_compressed_tokens", num_compressed_tokens)
+              num_tokens = num_tokens - (layer * num_compressed_tokens)
+              sequence.append(globals()[token_group_name](num_tokens, seq_timestep))
+            seq_timestep += 1 # add timestep index for each block in seq
+    
+    else:
+        parsed_iter = zip(block, repeats) # zip blocks and repeats for assembling sequence
+        sequence = []
+        seq_timestep = 0
+        for block_idx, (block, repeat) in enumerate(parsed_iter):
+          token_groups = re.split(r';', block)
+          for _ in range(repeat):
+            for token_group in token_groups:
+              token_group_name = re.search(r'^(.*?)\{', token_group).group(1)
+              num_tokens = int(re.search(r'\d+', token_group).group())
+              print("num_tokens", num_tokens)
+              sequence.append(globals()[token_group_name](num_tokens, seq_timestep))
+            seq_timestep += 1 # add timestep index for each block in seq
     
     return sequence
     
@@ -270,14 +294,16 @@ class TokenSequence:
     
     return iter(slice_idx)
 
-  def generate_attention_mask(self, repeats = 1):
+  def generate_attention_mask(self, repeats = 1, layer=None):
     """
     This method generates an attention mask for the given sequence.
     """ 
-    attention_mask = jnp.vstack([token_group.attention_rule(self.token_sequence) for token_group in self.token_sequence])
+    token_sequence = self._parse(layer=layer)
+    attention_mask = jnp.vstack([token_group.attention_rule(self.token_sequence) for token_group in token_sequence])
     attention_mask = jnp.asarray(attention_mask, dtype=bool)
+
     return e.repeat(attention_mask, "q k -> repeats q k", repeats=repeats)
-    
+
   def get_modality_idx(self, modality):
       """
       Return the indices in the sequence corresponding to tokens of a given modality.
@@ -299,9 +325,10 @@ class TokenEmbeddings:
 
 if __name__=="__main__":
     # basic tests of token sequence
-    multi_modal_seq = "[TaskDescriptionPrefix{2}] [Image{2};Readout{2}]*2"
-    seq = TokenSequence(multi_modal_seq)
-    attention_mask = seq.generate_attention_mask()
+    multi_modal_seq = "[TaskDescriptionPrefix{20}] [Image{10};Readout{10}]*2"
+    multi_modal_compressed_seq = "[TaskDescriptionPrefix{0}] [Image{2};Readout{0}]*2"
+    seq = TokenSequence(multi_modal_seq, multi_modal_compressed_seq)
+    attention_mask = seq.generate_attention_mask(layer=0)
     print(attention_mask.shape)
     print(attention_mask)
     
