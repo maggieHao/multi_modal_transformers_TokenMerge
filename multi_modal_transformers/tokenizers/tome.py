@@ -5,6 +5,8 @@ Reference: https://arxiv.org/pdf/2210.09461.pdf
 """
 
 from typing import Tuple, Callable
+
+import math
 import jax.numpy as jnp
 
 
