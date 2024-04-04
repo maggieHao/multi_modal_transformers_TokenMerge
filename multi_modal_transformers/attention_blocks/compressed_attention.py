@@ -37,7 +37,8 @@ class CompressedMultiHeadDotProductAttention(nn.Module):
   kernel_init: Initializer = default_kernel_init
   bias_init: Initializer = initializers.zeros_init()
   use_bias: bool = True
-  attention_fn: Callable[..., Array] = dot_product_attention
+  prune_fn: Callable = None
+  merge_fn: Callable = None
   decode: bool = False
   normalize_qk: bool = False
   # Deprecated, will be removed.
@@ -50,7 +51,6 @@ class CompressedMultiHeadDotProductAttention(nn.Module):
   def __call__(
     self,
     inputs_q: Array,
-    merge_fn: Callable = None,
     inputs_k: Optional[Array] = None,
     inputs_v: Optional[Array] = None,
     *,
@@ -284,11 +284,11 @@ class CompressedMultiHeadDotProductAttention(nn.Module):
             jnp.mean(attn_weights, axis=-1), # mean across sequence
             axis=-2) # batch, num_tokens
 
-    # slice important scores for modality and take top-k
-    #x = merge_fn()
+    # compress tokens with prune_fn
+    x = self.prune_fn(x, importance_scores)
 
-    # compute top-k tokens for each sample in batch
-    #x = jax.vmap(compute_top_k_tokens, in_axes=(0, None, None))(importance_scores, tokenset_idx, tokenset_merge_k) 
+    # compress tokens with merge_fn
+    #x = self.merge_fn()
     
     # output projection
     out = DenseGeneral(
@@ -315,13 +315,19 @@ class CompressedEncoder1DBlock(nn.Module):
     compressed_attention: DictConfig
     mlp_block: DictConfig
     train: Optional[bool] = None
+    prune_fn: Optional[Callable] = None
+    merge_fn: Optional[Callable] = None
     
     @nn.compact
-    def __call__(self, inputs, merge_fn=, mask=None, train=None):
+    def __call__(self, inputs, mask=None, train=None):
 
         # Attention block.
         x = instantiate(self.layer_norm)(inputs)
-        x = instantiate(self.compressed_attention)(x, x, merge_fn=merge_fn, mask=mask, train=not train)
+        
+        # require partial instantiation for compressed attention as we pass fn
+        compressed_attn = instantiate(self.compressed_attention, _partial_=True)
+        compressed_attn(prune_fn=self.prune_fn, merge_fn=self.merge_fn)(x, x, mask=mask, train=not train)
+        
         x = instantiate(self.dropout)(x, not train)
         
         # skip connection
@@ -331,7 +337,7 @@ class CompressedEncoder1DBlock(nn.Module):
         y = instantiate(self.layer_norm)(x)
         y = instantiate(self.mlp_block, _recursive_=False)(y, train)
 
-        return x + y, None
+        return x + y
 
 class AddPositionEmbedding(nn.Module):
     """Adds learned positional embeddings to the inputs."""
@@ -354,9 +360,11 @@ class StackedCompressedEncoder1DBlock(nn.Module):
 
     num_blocks: int
     encoder_1d_block: DictConfig
+    prune_fns: Optional[Callable] = None
+    merge_fns: Optional[Callable] = None
 
     @nn.compact
-    def __call__(self, x, merge_fns, masks, train=False,):
+    def __call__(self, x, masks, train=False):
         
         # apply learnt position embedding
         x = AddPositionEmbedding(
@@ -366,9 +374,9 @@ class StackedCompressedEncoder1DBlock(nn.Module):
 
         # TODO: consider converting to scan later
         for layer_idx in range(self.num_blocks):
-            x, _ = instantiate(self.encoder_1d_block)(
+            encoder_block = instantiate(self.encoder_1d_block, _partial_=True)
+            x = encoder_block(self.prune_fns[layer_idx], self.merge_fns[layer_idx])(
                     x, 
-                    merge_fn=merge_fns[layer_idx],
                     mask=masks[layer_idx],
                     train=train,
                     )

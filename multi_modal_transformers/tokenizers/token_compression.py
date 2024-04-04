@@ -10,7 +10,8 @@ import jax
 import jax.numpy as jnp
 import einops as e
 
-# token pruning methods
+### token pruning methods ###
+
 @partial(jax.jit, static_argnums=(2,3))
 def compute_top_k_tokens(embeddings, importance_scores, tokenset_idx, tokenset_k):
     """
@@ -34,26 +35,19 @@ def compute_top_k_tokens(embeddings, importance_scores, tokenset_idx, tokenset_k
         
         return idx
 
-    # get top-k tokens for each tokenset
+    # get ids of top-k tokens for each tokenset (TODO: optimize with vmap)
     ids = []
     for k, slice_id in zip(tokenset_k, tokenset_idx):
         subset = jax.lax.dynamic_slice_in_dim(importance_scores, slice_id[0], slice_id[1], axis=0)
         idx = top_k(subset, k, slice_id[0])
-        jax.debug.print("subset shape: {}", subset.shape)
-        jax.debug.print("idx shape: {}", idx.shape)
         ids.append(idx)
-
     ids = jnp.concatenate(ids, axis=-1)
-    #jax.debug.print("ids shape: {}", ids.shape)
-
-    # finally assemble compressed sequence
-    compressed_embeddings = jnp.take(embeddings, ids, axis=0)    
-
-    return compressed_embeddings
+    
+    return jnp.take(embeddings, ids, axis=0)    
 
 
+### token merging methods ###
 
-# token merging methods
 def do_nothing(x, mode=None):
     return x
 
