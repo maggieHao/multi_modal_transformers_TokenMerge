@@ -193,6 +193,7 @@ class TokenSequence:
     self.token_compression_sequence_str = token_compression_sequence
     self.token_sequence = self._parse()
     self.slice_idx = self._generate_embedding_slices()
+    self.tokenset_slices = self._generate_embedding_subsets()
     self.assemble_embeddings = jax.jit(self._assemble_embeddings, static_argnames=["slice_idx"])
 
   def _parse(self, layer=0):
@@ -293,6 +294,24 @@ class TokenSequence:
         modality_idx[token_group.modality] = start_idx + token_group.num_tokens
     
     return iter(slice_idx)
+  
+  def _generate_embedding_subsets(self):
+    """
+    Generate indices for distinct tokensets in sequence.
+    """
+    slice_idx = []
+    curr_idx = 0
+    for token_group in self.token_sequence:
+        start_idx = curr_idx
+        slice_idx.append(
+                tuple([
+                    start_idx, 
+                    token_group.num_tokens,
+                    ])
+                )
+        curr_idx += token_group.num_tokens 
+
+    return iter(slice_idx)
 
   def generate_attention_mask(self, repeats = 1, layer=None):
     """
@@ -316,6 +335,12 @@ class TokenSequence:
               idx.append(jnp.arange(curr_idx, stop_idx))
           curr_idx += token_group.num_tokens
       return jnp.ravel(jnp.array(idx))
+
+  def generate_layer_token_sequence(self, layer):
+    """
+    Generate the token sequence.
+    """
+    return self._parse(layer=layer)
 
 @flax.struct.dataclass
 class TokenEmbeddings:

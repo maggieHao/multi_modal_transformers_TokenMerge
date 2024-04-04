@@ -2,33 +2,54 @@
 Methods for compressing tokens. 
 """
 
+from functools import partial
 from typing import Tuple, Callable
 
 import math
+import jax
 import jax.numpy as jnp
-
+import einops as e
 
 # token pruning methods
-def compute_top_k_tokens(importance_scores, tokenset_idx, tokenset_k):
-    """Compute top-k tokens based on importance scores."""
+@partial(jax.jit, static_argnums=(2,3))
+def compute_top_k_tokens(embeddings, importance_scores, tokenset_idx, tokenset_k):
+    """
+    Compute top-k tokens per modality based on importance scores.
+
+    Args:
+        embeddings: token embeddings
+        importance_scores: token importance scores (mean across attention heads + keys)
+        tokenset_idx: (start_idx, num_tokens) for each modality in the sequence
+        tokenset_k: the number of tokens to compress to for each modality
+    """
     
-    def top_k(importance_scores, k, start_idx):
+    def top_k(importance_scores, k, seq_start_idx):
         """Compute top-k tokens based on importance scores for a tokenset from sequence."""
-        
+
         # compute indices of top-k
         _, idx = jax.lax.top_k(importance_scores, k)
 
         # adjust top-k indices to account for token set starting index in sequence
-        idx += start_idx
+        idx += seq_start_idx
         
         return idx
 
-    # get top-k tokens for each modality
-    modality_subsets = jax.vmap(jax.lax.dynamic_slice_in_dim, (None, 0, 0, None))(importance_scores, tokenset_idx[0], tokenset_idx[1], axis=-1)
-    idx = jax.vmap(top_k, in_axes=(0, 0))(modality_subsets, tokenset_merge_k)
-    idx = e.rearrange(idx, 'num_modalities num_tokens idx -> (num_modalities num_tokens) idx')
+    # get top-k tokens for each tokenset
+    ids = []
+    for k, slice_id in zip(tokenset_k, tokenset_idx):
+        subset = jax.lax.dynamic_slice_in_dim(importance_scores, slice_id[0], slice_id[1], axis=0)
+        idx = top_k(subset, k, slice_id[0])
+        jax.debug.print("subset shape: {}", subset.shape)
+        jax.debug.print("idx shape: {}", idx.shape)
+        ids.append(idx)
 
-    return idx
+    ids = jnp.concatenate(ids, axis=-1)
+    #jax.debug.print("ids shape: {}", ids.shape)
+
+    # finally assemble compressed sequence
+    compressed_embeddings = jnp.take(embeddings, ids, axis=0)    
+
+    return compressed_embeddings
 
 
 
@@ -112,4 +133,44 @@ def merge_wavg(
     x = x / size
 
     return x, size
+
+
+if __name__=="__main__":
+    from token_sequencer import TokenSequence
+    import jax
+    from jax import random
+
+    batch_size = 10
+    seq_len = 40
+    embed_dim = 128
+
+    # dummy token sequence 
+    multi_modal_seq = "[TaskDescriptionPrefix{20}] [Image{10};Readout{10}]"
+    multi_modal_compressed_seq = "[TaskDescriptionPrefix{2}] [Image{2};Readout{0}]"
+    seq = TokenSequence(multi_modal_seq, multi_modal_compressed_seq)
+    compressed_seq = seq.generate_layer_token_sequence(layer=1)
+    top_k = tuple([tokenset.num_tokens for tokenset in compressed_seq])
+    jax.debug.print("top_k: {}", top_k)
+
+    # dummy embeddings
+    task_description_embeddings = jnp.ones((batch_size, 20, embed_dim))
+    image_embeddings = jnp.ones((batch_size, 10, embed_dim))
+    readout_embeddings = jnp.ones((batch_size, 10, embed_dim))
+    input_embeddings = jnp.concatenate([task_description_embeddings, image_embeddings, readout_embeddings], axis=1)
+
+    # dummy importance scores
+    key = random.PRNGKey(0)
+    random_importance_scores = random.normal(key, (batch_size, seq_len))
+    
+    # generate token slices for modality
+    slices = seq.tokenset_slices
+    jax.debug.print("slices: {}", slices)
+
+    # compress token sequence
+
+    jax.debug.print("input_embeddings shape: {}", input_embeddings.shape)
+    #output_embeddings = jax.vmap(compute_top_k_tokens, in_axes=(0, 1, None, None), out_axes=0)(input_embeddings, random_importance_scores, slices, top_k)
+    #output_embeddings = compute_top_k_tokens(input_embeddings[0], random_importance_scores[0], slices, top_k)
+    output_embeddings = jax.vmap(compute_top_k_tokens, in_axes=(0, 0, None, None), out_axes=0)(input_embeddings, random_importance_scores, slices, top_k)
+    jax.debug.print("output_embeddings shape: {}", output_embeddings.shape)
 
