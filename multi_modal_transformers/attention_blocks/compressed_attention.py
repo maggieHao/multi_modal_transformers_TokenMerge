@@ -15,6 +15,8 @@ import einops as e
 from omegaconf import DictConfig
 from hydra.utils import call, instantiate
 
+from multi_modal_transformers.tokenizers.token_compression import compute_top_k_tokens
+
 
 class CompressedMultiHeadDotProductAttention(nn.Module):
   """
@@ -48,6 +50,7 @@ class CompressedMultiHeadDotProductAttention(nn.Module):
   def __call__(
     self,
     inputs_q: Array,
+    merge_fn: Callable = None,
     inputs_k: Optional[Array] = None,
     inputs_v: Optional[Array] = None,
     *,
@@ -55,8 +58,6 @@ class CompressedMultiHeadDotProductAttention(nn.Module):
     mask: Optional[Array] = None,
     deterministic: Optional[bool] = None,
     dropout_rng: Optional[PRNGKey] = None,
-    tokenset_idx: Optional[Array] = None, # start idx  and num tokens for each modality
-    tokenset_merge_k: Optional[int] = None, # top-k tokens to keep for each modality (only for pruning)
   ):
     """Applies multi-head dot product attention on the input data.
 
@@ -284,29 +285,10 @@ class CompressedMultiHeadDotProductAttention(nn.Module):
             axis=-2) # batch, num_tokens
 
     # slice important scores for modality and take top-k
-    def compute_top_k_tokens(importance_scores, tokenset_idx, k):
-        """Compute top-k tokens based on importance scores for across a single sample from batch."""
-        
-        def top_k(importance_scores, k, start_idx):
-            """Compute top-k tokens based on importance scores for a subset of tokens from sequence."""
-            
-            # compute indices of top-k
-            _, idx = jax.lax.top_k(importance_scores, k)
-            
-            # adjust top-k indices to account for token set index in sequence
-            idx += start_idx
-            
-            return idx
+    #x = merge_fn()
 
-        # get top-k tokens for each modality
-        modality_subsets = jax.vmap(jax.lax.dynamic_slice_in_dim, (None, 0, 0, None))(importance_scores, tokenset_idx[0], tokenset_idx[1], axis=-1)
-        idx = jax.vmap(top_k, in_axes=(0, 0))(modality_subsets, tokenset_merge_k)
-        idx = e.rearrange(idx, 'num_modalities num_tokens idx -> (num_modalities num_tokens) idx')
-
-        return idx
-    
     # compute top-k tokens for each sample in batch
-    x = jax.vmap(compute_top_k_tokens, in_axes=(0, None, None))(importance_scores, tokenset_idx, tokenset_merge_k) 
+    #x = jax.vmap(compute_top_k_tokens, in_axes=(0, None, None))(importance_scores, tokenset_idx, tokenset_merge_k) 
     
     # output projection
     out = DenseGeneral(
@@ -335,11 +317,11 @@ class CompressedEncoder1DBlock(nn.Module):
     train: Optional[bool] = None
     
     @nn.compact
-    def __call__(self, inputs, tokenset_idx, tokenset_merge_k, mask=None, train=None):
+    def __call__(self, inputs, merge_fn=, mask=None, train=None):
 
         # Attention block.
         x = instantiate(self.layer_norm)(inputs)
-        x = instantiate(self.compressed_attention)(x, x, tokenset_idx=tokenset_idx, tokenset_merge_k=tokenset_merge_k, mask=mask, train=not train)
+        x = instantiate(self.compressed_attention)(x, x, merge_fn=merge_fn, mask=mask, train=not train)
         x = instantiate(self.dropout)(x, not train)
         
         # skip connection
@@ -374,7 +356,7 @@ class StackedCompressedEncoder1DBlock(nn.Module):
     encoder_1d_block: DictConfig
 
     @nn.compact
-    def __call__(self, x, tokenset_idx, tokenset_merge_k, masks, train=False,):
+    def __call__(self, x, merge_fns, masks, train=False,):
         
         # apply learnt position embedding
         x = AddPositionEmbedding(
@@ -386,8 +368,7 @@ class StackedCompressedEncoder1DBlock(nn.Module):
         for layer_idx in range(self.num_blocks):
             x, _ = instantiate(self.encoder_1d_block)(
                     x, 
-                    tokenset_idx=tokenset_idx[layer_idx],
-                    tokenset_merge_k=tokenset_merge_k[layer_idx],
+                    merge_fn=merge_fns[layer_idx],
                     mask=masks[layer_idx],
                     train=train,
                     )

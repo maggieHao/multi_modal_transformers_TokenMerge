@@ -1,7 +1,5 @@
 """
-Impelementation of the bipartite soft matching algorithm for token merging.
-
-Reference: https://arxiv.org/pdf/2210.09461.pdf
+Methods for compressing tokens. 
 """
 
 from typing import Tuple, Callable
@@ -10,6 +8,31 @@ import math
 import jax.numpy as jnp
 
 
+# token pruning methods
+def compute_top_k_tokens(importance_scores, tokenset_idx, tokenset_k):
+    """Compute top-k tokens based on importance scores."""
+    
+    def top_k(importance_scores, k, start_idx):
+        """Compute top-k tokens based on importance scores for a tokenset from sequence."""
+        
+        # compute indices of top-k
+        _, idx = jax.lax.top_k(importance_scores, k)
+
+        # adjust top-k indices to account for token set starting index in sequence
+        idx += start_idx
+        
+        return idx
+
+    # get top-k tokens for each modality
+    modality_subsets = jax.vmap(jax.lax.dynamic_slice_in_dim, (None, 0, 0, None))(importance_scores, tokenset_idx[0], tokenset_idx[1], axis=-1)
+    idx = jax.vmap(top_k, in_axes=(0, 0))(modality_subsets, tokenset_merge_k)
+    idx = e.rearrange(idx, 'num_modalities num_tokens idx -> (num_modalities num_tokens) idx')
+
+    return idx
+
+
+
+# token merging methods
 def do_nothing(x, mode=None):
     return x
 
