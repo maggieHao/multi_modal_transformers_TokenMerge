@@ -233,8 +233,6 @@ class TokenSequence:
               token_group_name = re.search(r'^(.*?)\{', token_group).group(1)
               num_tokens = int(re.search(r'\d+', token_group).group())
               num_compressed_tokens = int(re.search(r'\d+', compressed_token_group).group())
-              print("num_tokens", num_tokens)
-              print("num_compressed_tokens", num_compressed_tokens)
               num_tokens = num_tokens - (layer * num_compressed_tokens)
               sequence.append(globals()[token_group_name](num_tokens, seq_timestep))
             seq_timestep += 1 # add timestep index for each block in seq
@@ -249,7 +247,6 @@ class TokenSequence:
             for token_group in token_groups:
               token_group_name = re.search(r'^(.*?)\{', token_group).group(1)
               num_tokens = int(re.search(r'\d+', token_group).group())
-              print("num_tokens", num_tokens)
               sequence.append(globals()[token_group_name](num_tokens, seq_timestep))
             seq_timestep += 1 # add timestep index for each block in seq
     
