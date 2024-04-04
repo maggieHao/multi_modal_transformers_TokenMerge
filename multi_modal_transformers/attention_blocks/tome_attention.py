@@ -9,11 +9,12 @@ import jax
 import jax.numpy as jnp
 import flax
 import flax.linen as nn
+import math
 from flax.linen import initializers
 
 from omegaconf import DictConfig
 from hydra.utils import call, instantiate
-
+from multi_modal_transformers.tokenizers.token_compression import bipartite_soft_matching, merge_wavg
 
 class ToMeMultiHeadDotProductAttention(nn.Module):
   """
@@ -246,7 +247,13 @@ class ToMeMultiHeadDotProductAttention(nn.Module):
       m_deterministic = True
 
     # TODO: add ToMe here
-    
+    # should be defined early, from the attention configs etc.
+    # size should be defined in the model and returned in the end
+    r = 5
+    keys_avg = jnp.sum(random_array, axis=2)
+    merge = bipartite_soft_matching(keys_avg, r = r)
+    # updated x after merging
+    x, size = merge_wavg(merge, x, size) 
 
     # apply attention
     if sow_weights:
