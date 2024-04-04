@@ -1,15 +1,35 @@
 """
 Attention Blocks with token compression methods.
 """
-
-from typing import Optional, Callable
-from jax.typing import ArrayLike
+import functools
+import warnings
+from typing import Any, Callable, Optional, Union, overload
 
 import jax
 import jax.numpy as jnp
+from jax import lax, random
+from jax.typing import ArrayLike
+
+from flax.linen import initializers
+from flax.linen.dtypes import promote_dtype
+from flax.linen.linear import (
+  DenseGeneral,
+  default_kernel_init,
+)
+from flax.linen.module import Module, compact, merge_param
+from flax.linen.normalization import LayerNorm
+from flax.typing import (
+  Array,
+  PRNGKey,
+  Dtype,
+  Shape as Shape,
+  Initializer,
+  PrecisionLike,
+  DotGeneralT,
+)
+
 import flax
 import flax.linen as nn
-from flax.linen import initializers
 import einops as e
 
 from omegaconf import DictConfig
@@ -312,7 +332,7 @@ class CompressedEncoder1DBlock(nn.Module):
 
     layer_norm: DictConfig 
     dropout: DictConfig
-    compressed_attention: DictConfig
+    self_attention: DictConfig
     mlp_block: DictConfig
     train: Optional[bool] = None
     prune_fn: Optional[Callable] = None
@@ -325,7 +345,7 @@ class CompressedEncoder1DBlock(nn.Module):
         x = instantiate(self.layer_norm)(inputs)
         
         # require partial instantiation for compressed attention as we pass fn
-        compressed_attn = instantiate(self.compressed_attention, _partial_=True)
+        compressed_attn = instantiate(self.self_attention, _partial_=True)
         compressed_attn(prune_fn=self.prune_fn, merge_fn=self.merge_fn)(x, x, mask=mask, train=not train)
         
         x = instantiate(self.dropout)(x, not train)
@@ -383,8 +403,4 @@ class StackedCompressedEncoder1DBlock(nn.Module):
         
         return x
 
-
-if __name__=="__main__":
-
-    # add basic tests for merging modules here
 
